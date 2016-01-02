@@ -1,0 +1,16 @@
+* build f =
+  * if not . exist $ f
+    * run_do f
+    * return (f, md5 f)
+
+  * old_md5 <- getChildren f
+  * new_md5 <- mapM (build . fst) old_md5
+  * if any zipWith (/=) old_md5 new_md5
+    * nc <- createTemp
+    * run_do nc f
+    * setChildren f nc
+
+  * return (f, md5 f)
+
+* redo-ifchange fs =
+  * mapM build fs >>= addChildren
