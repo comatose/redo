@@ -1,16 +1,33 @@
-* build f =
-  * if not . exist $ f
+* redo f =
+  * p <- outdated f
+  * if p
+  * then
     * run_do f
-    * return (f, md5 f)
-
-  * old_md5 <- getChildren f
-  * new_md5 <- mapM (build . fst) old_md5
-  * if any zipWith (/=) old_md5 new_md5
-    * nc <- createTemp
-    * run_do nc f
-    * setChildren f nc
-
-  * return (f, md5 f)
+  * else
+    * return ()
 
 * redo-ifchange fs =
-  * mapM build fs >>= addChildren
+  * mapM redo fs >>= addChildren
+
+* outdated f =
+  * x <- exist f
+  * if x
+  * then
+    * getChildren f >>= mapM (outdated . curry) >>= return . or
+  * else
+    * return True
+
+* outdated' f oldMD5 =
+  * x <- exist f
+  * if x
+  * then
+    * newMD5 <- md5 f
+    * or <$> pure (oldMD5 /= newMD5) <*> outdated f
+  * else
+    * return True
+
+* run_do f =
+  * newDep <- createTempFile
+  * dofile <- findDoFile f
+  * execute dofile
+  * rename newDep (depFile f)

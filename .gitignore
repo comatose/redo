@@ -1,8 +1,10 @@
 /redo
-/redo.hi
-/redo.o
+/*.hi
+/*.o
 /README.txt
 /.redo
 /cabal-dev
 /dist
 /README.html
+/redo2.hi
+/redo2
