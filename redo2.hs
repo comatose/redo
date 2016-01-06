@@ -20,6 +20,27 @@ configPath = ".redo"
 tempPath :: FilePath
 tempPath = configPath </> "tmp"
 
+data Signature = NoSignature | AnySignature | Signature String deriving (Show, Read)
+
+instance Eq Signature where
+  (Signature x) == (Signature y) = x == y
+  NoSignature == _ = False
+  _ == NoSignature = False
+  _ == _ = True
+
+fileSignature :: FilePath -> IO Signature
+fileSignature f = handle
+  (\(_ :: SomeException) -> return NoSignature)
+  (Signature . show . MD5.md5 <$> BL.readFile f)
+
+addDeps :: FilePath -> FilePath -> Signature -> IO ()
+addDeps target dep sig = withFile target AppendMode (`hPutStrLn` show (dep, sig))
+
+getDeps :: FilePath -> IO (Maybe [(FilePath, Signature)])
+getDeps f = handle
+  (\(_ :: SomeException) -> return Nothing)
+  (Just . map read . lines <$> readFile (configPath </> f))
+
 main :: IO ()
 main = do
   cmd <- getProgName
@@ -30,71 +51,73 @@ main = do
       case maybeDepsPath of
         (Just depsPath) -> do
           deps <- getArgs
-          md5s <- mapM redo deps
-          zipWithM_ (addDeps depsPath) deps md5s
+          sigs <- mapM redo deps
+          zipWithM_ (addDeps depsPath) deps sigs
         Nothing -> return ()
     _ -> return ()
 
 getDepsPath :: IO (Maybe String)
 getDepsPath = lookupEnv "REDO_DEPS_PATH"
 
-redo :: FilePath -> IO String
+redo :: FilePath -> IO Signature
 redo f = do
-  p <- upToDate f
+  p <- upToDate f AnySignature
   if p
     then hPutStrLn stderr (f ++ " is up to date.")
     else do
       hPutStrLn stderr $ "redo " ++ f
-      runDo f
-  fileMD5 f
+      r <- runDo f
+      unless r $ error "Failed."
+  fileSignature f
 
-addDeps :: FilePath -> FilePath -> String -> IO ()
-addDeps target dep md5 = withFile target AppendMode (`hPutStrLn` show (dep, md5))
-
-upToDate :: FilePath -> IO Bool
-upToDate f = do
-  x <- doesFileExist f
-  if x
-    then do
-      maybeDeps <- getDeps f
+upToDate :: FilePath -> Signature -> IO Bool
+upToDate file oldSig = do
+  newSig <- fileSignature file
+  if oldSig /= newSig
+    then return False
+    else do
+      maybeDeps <- getDeps file
       case maybeDeps of
         (Just deps) -> if null deps
                        then return True
-                       else and <$> mapM upToDate' deps
+                       else and <$> mapM (uncurry upToDate) deps
         Nothing -> return False
+
+runDo :: FilePath -> IO Bool
+runDo target = do
+  doFiles <- filterM (doesFileExist . snd) (listDoFiles target)
+  if null doFiles
+    then handleNoDo target
+    else executeDo target $ head doFiles
+
+handleNoDo :: FilePath -> IO Bool
+handleNoDo target = do
+  x <- doesFileExist target
+  if x
+    then do createFile $ configPath </> target
+            return True
     else return False
 
-upToDate' :: (FilePath, String) -> IO Bool
-upToDate' (f, oldMD5) = do
-  x <- doesFileExist f
-  if x
-    then do newMD5 <- fileMD5 f
-            if oldMD5 /= newMD5
-              then return False
-              else upToDate f
-    else hPutStrLn stderr (f ++ " not exist.") >> return False
-
-fileMD5 :: FilePath -> IO String
-fileMD5 f = show . MD5.md5 <$> BL.readFile f
-
--- TODO: add do files into dependencies
-getDeps :: FilePath -> IO (Maybe [(FilePath, String)])
-getDeps f = handle
-  (\(_ :: SomeException) -> return Nothing)
-  (Just . map read . lines <$> readFile (configPath </> f))
-
-runDo :: FilePath -> IO ()
-runDo target = do
-  (baseName, doFile) <- head <$> filterM (doesFileExist . snd) (doFiles target)
+executeDo :: FilePath -> (String, FilePath) -> IO Bool
+executeDo target (baseName, doFile) = do
+  createFile $ configPath </> doFile
   tmpDeps <- createTempFile tempPath target
   tmpOut <- createTempFile tempPath target
-  callCommand $ cmds tmpDeps doFile baseName tmpOut
+  fileSignature doFile >>= addDeps tmpDeps doFile
+  hPutStrLn stderr $ "runDo " ++ doFile
+  callCommand $ cmds tmpDeps tmpOut
   renameFile tmpOut target
   renameFile tmpDeps (configPath </> target)
-  where cmds tmpDeps doFile baseName tmpOut
-          = unwords ["REDO_DEPS_PATH='" ++ tmpDeps ++ "'",
-                     "sh -ev", doFile, target, baseName,
-                     tmpOut, ">", tmpOut]
+  return True
+    where cmds tmpDeps tmpOut
+            = unwords ["REDO_DEPS_PATH='" ++ tmpDeps ++ "'",
+                       "sh -ex", doFile, target, baseName, tmpOut]
+
+createFile :: FilePath -> IO ()
+createFile path = do
+  createDirectoryIfMissing True (takeDirectory path)
+  h <- openFile path WriteMode
+  hClose h
 
 createTempFile :: FilePath -> String -> IO FilePath
 createTempFile path baseName = do
@@ -103,8 +126,8 @@ createTempFile path baseName = do
   hClose h
   return f
 
-doFiles :: FilePath -> [(FilePath, FilePath)]
-doFiles target = (target, target <.> "do") : defaultDos
+listDoFiles :: FilePath -> [(String, FilePath)]
+listDoFiles target = (target, target <.> "do") : defaultDos
   where tokens = splitOn "." target
         defaultDos = map ((intercalate "." *** toFileName) . (`splitAt` tokens)) [1..length tokens]
         toFileName = intercalate "." . ("default":) . (++["do"])
