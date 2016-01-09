@@ -23,6 +23,13 @@ configPath = ".redo"
 tempPath :: FilePath
 tempPath = configPath </> "tmp"
 
+data RedoException =
+  NoDoFileExist FilePath |
+  DoExitFailure Int
+  deriving (Show, Typeable)
+
+instance Exception RedoException
+
 data Signature = NoSignature | AnySignature | Signature String deriving (Show, Read)
 
 instance Eq Signature where
@@ -30,13 +37,6 @@ instance Eq Signature where
   NoSignature == _ = False
   _ == NoSignature = False
   _ == _ = True
-
-data RedoException =
-  NoDoFileExist FilePath |
-  DoExitFailure Int
-  deriving (Show, Typeable)
-
-instance Exception RedoException
 
 fileSignature :: FilePath -> IO Signature
 fileSignature f = handle
@@ -46,10 +46,41 @@ fileSignature f = handle
 addDeps :: FilePath -> FilePath -> Signature -> IO ()
 addDeps target dep sig = withFile target AppendMode (`hPutStrLn` show (dep, sig))
 
-getDeps :: FilePath -> IO (Maybe [(FilePath, Signature)])
-getDeps f = handle
-  (\(_ :: SomeException) -> return Nothing)
-  (Just . map read . lines <$> readFile (configPath </> f))
+data RedoTarget = RedoTarget {absoluteDir :: String, relativeDir :: String, baseName :: String} deriving (Show, Read)
+
+redoTarget target = do
+  baseDir <- getCurrentDirectory
+  if isRelative directory
+    then return $ RedoTarget (baseDir </> directory) directory targetName
+    else return $ RedoTarget directory (makeRelative baseDir directory) targetName
+  where targetName = takeBaseName target
+        directory = takeDirectory target
+
+(<//>) :: FilePath -> FilePath -> FilePath
+x <//> y = normalise $ x ++ (pathSeparator : y)
+
+normaliseEx :: FilePath -> FilePath
+normaliseEx = normalise . intercalate [pathSeparator] . go . splitOn [pathSeparator]
+  where go (_:"..":xs) = go xs
+        go (x:xs) = x:go xs
+        go [] = []
+
+makeRelativeEx :: FilePath -> FilePath -> FilePath
+makeRelativeEx baseDir f = intercalate [pathSeparator] $ go (splitOn [pathSeparator] baseDir) (splitOn [pathSeparator] $ takeDirectory f)
+
+go :: [FilePath] -> [FilePath] -> [FilePath]
+go [] [] = []
+go [] ys = ys
+go xs [] = replicate (length xs) ".."
+go xall@(x:xs) yall@(y:ys)
+  | x == y = go xs ys
+  | otherwise = replicate (length xall) ".." ++ yall
+
+absolutePath :: RedoTarget -> FilePath
+absolutePath target = absoluteDir target </> baseName target
+
+relativePath :: RedoTarget -> FilePath
+relativePath target = relativeDir target </> baseName target
 
 main :: IO ()
 main = do
@@ -105,6 +136,14 @@ upToDate file oldSig = do
                        else and <$> mapM (uncurry upToDate) deps
         Nothing -> return False
 
+getDeps :: FilePath -> IO (Maybe [(FilePath, Signature)])
+getDeps f = handle
+  (\(_ :: SomeException) -> return Nothing)
+  (do f' <- canonicalizePath f
+      s <- readFile (configPath <//> f')
+      return . Just . map read . lines $ s)
+  -- (Just . map read . lines <$> readFile (configPath </> f))
+
 runDo :: FilePath -> IO ()
 runDo target = do
   doFiles <- filterM (doesFileExist . snd) (listDoFiles target)
@@ -126,10 +165,11 @@ handleNoDo target = do
 executeDo :: FilePath -> (String, FilePath) -> IO ()
 executeDo target (baseName, doFile) = do
   createFile $ configPath </> doFile
-  tmpDeps <- createTempFile tempPath target
-  tmpOut <- createTempFile tempPath target
+  tmpDeps <- createTempFile tempPath (takeBaseName target)
+  tmpOut <- createTempFile tempPath (takeBaseName target)
   fileSignature doFile >>= addDeps tmpDeps doFile
   callDepth <- getCallDepth
+  print $ cmds tmpDeps (callDepth + 1) tmpOut
   ph <- spawnCommand $ cmds tmpDeps (callDepth + 1) tmpOut
   ec <- waitForProcess ph
   case ec of
