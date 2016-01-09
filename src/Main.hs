@@ -156,8 +156,8 @@ executeDo target (baseName, doFile) = do
   ec <- waitForProcess ph
   case ec of
     ExitSuccess -> do
-      renameFile tmpOut $ targetPath target
-      renameFile tmpDeps $ depFilePath target
+      moveFile tmpOut $ targetPath target
+      moveFile tmpDeps $ depFilePath target
     ExitFailure err -> do
       removeFile tmpOut
       removeFile tmpDeps

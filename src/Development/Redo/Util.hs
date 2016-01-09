@@ -53,3 +53,8 @@ createTempFile path name = do
   (f, h) <- openTempFile path name
   hClose h
   return f
+
+moveFile :: FilePath -> FilePath -> IO ()
+moveFile src trg = do
+  createDirectoryIfMissing True $ takeDirectory trg
+  renameFile src trg
