@@ -47,42 +47,37 @@ fileSignature f = handle
   (\(_ :: SomeException) -> return NoSignature)
   (Signature . show . MD5.md5 <$> BL.readFile f)
 
-addDeps :: FilePath -> FilePath -> Signature -> IO ()
-addDeps target dep sig = withFile target AppendMode (`hPutStrLn` show (dep, sig))
+addDependency :: FilePath -> RedoTarget -> Signature -> IO ()
+addDependency depsFile dep sig =
+  withFile depsFile AppendMode (`hPutStrLn` show (targetPath dep, sig))
 
-data RedoTarget = RedoTarget {absoluteDir :: String,
-                              relativeDir :: String,
-                              fileName :: String} deriving (Show, Read)
+newtype RedoTarget = RedoTarget {targetPath :: String} deriving (Show, Read)
 
 redoTarget :: FilePath -> IO RedoTarget
-redoTarget target = (flip redoTargetFromDir) target <$> getCurrentDirectory
+redoTarget target = flip redoTargetFromDir target <$> getCurrentDirectory
 
-redoTargetFromDir :: FilePath -> FilePath -> RedoTarget
+redoTargetFromDir :: FilePath -- ^ base directory, this should be an absolute path.
+                  -> FilePath
+                  -> RedoTarget
 redoTargetFromDir baseDir target =
-  if isRelative directory
-    then RedoTarget (baseDir </> directory) directory targetName
-    else RedoTarget directory (makeRelative' baseDir directory) targetName
-  where targetName = takeFileName target
-        directory = takeDirectory target
-
-absolutePath :: RedoTarget -> FilePath
-absolutePath target = absoluteDir target </> fileName target
-
-relativePath :: RedoTarget -> FilePath
-relativePath target = relativeDir target </> fileName target
+  if isRelative $ takeDirectory target'
+    then RedoTarget target'
+    else RedoTarget $ makeRelative' baseDir target'
+  where target' = normalise' target
 
 main :: IO ()
 main = do
+  dir <- getCurrentDirectory
   cmd <- getProgName
   case cmd of
-    "redo" -> getArgs >>= mapM_ redo
+    "redo" -> getArgs >>= mapM_ (redo . redoTargetFromDir dir)
     "redo-ifchange" -> do
       maybeDepsPath <- getDepsPath
       case maybeDepsPath of
         (Just depsPath) -> do
-          deps <- getArgs
+          deps <- map (redoTargetFromDir dir) <$> getArgs
           sigs <- mapM redo deps
-          zipWithM_ (addDeps depsPath) deps sigs
+          zipWithM_ (addDependency depsPath) deps sigs
         Nothing -> return ()
     _ -> hPrint stderr $ "unknown command: " ++ cmd
 
@@ -94,41 +89,44 @@ getCallDepth = handle
   (\(_ :: SomeException) -> return 0)
   (read <$> getEnv "REDO_CALL_DEPTH")
 
-redo :: FilePath -> IO Signature
-redo f = do
+redo :: RedoTarget -> IO Signature
+redo target = do
   callDepth <- getCallDepth
   replicateM_ callDepth $ hPutChar stderr ' '
-  target <- redoTarget f
-  hPutStrLn stderr $ "redo  " ++ relativePath target
+  hPutStrLn stderr $ "redo  " ++ targetPath target
   p <- upToDate target AnySignature
   if p
-    then hPutStrLn stderr $ f ++ " is up to date."
+    then hPutStrLn stderr $ targetPath target ++ " is up to date."
     else runDo target
          `catch`
          \e -> case e of
            (NoDoFileExist t) -> hPutStrLn stderr $ "no rule to make " ++ quote t
-           (DoExitFailure err) -> hPutStrLn stderr $ f ++ " failed with exitcode " ++ show err
-  fileSignature f
+           (DoExitFailure err) -> hPutStrLn stderr $ targetPath target ++ " failed with exitcode " ++ show err
+  fileSignature $ targetPath target
 
 upToDate :: RedoTarget -> Signature -> IO Bool
 upToDate target oldSig = do
-  newSig <- fileSignature . relativePath $ target
+  newSig <- fileSignature . targetPath $ target
   if oldSig /= newSig
     then return False
     else do
-      maybeDeps <- getDeps target
+      maybeDeps <- getDependencies target
+      -- print (target, maybeDeps)
       case maybeDeps of
         (Just deps) -> if null deps
                        then return True
                        else and <$> mapM (uncurry upToDate) deps
         Nothing -> return False
 
-getDeps :: RedoTarget -> IO (Maybe [(RedoTarget, Signature)])
-getDeps target = handle
+depFilePath :: RedoTarget -> FilePath
+depFilePath target = configPath </> encodePath (targetPath target)
+
+getDependencies :: RedoTarget -> IO (Maybe [(RedoTarget, Signature)])
+getDependencies target = handle
   (\(_ :: SomeException) -> return Nothing)
   (do dir <- getCurrentDirectory
-      depLines <- lines <$> readFile (configPath <//> absolutePath target)
-      return . Just . map ((\(f, s) -> (redoTargetFromDir dir f, s)) . read) $ depLines)
+      depLines <- lines <$> readFile (depFilePath target)
+      return . Just . map (first (redoTargetFromDir dir) . read) $ depLines)
 
 runDo :: RedoTarget -> IO ()
 runDo target = do
@@ -140,25 +138,26 @@ runDo target = do
 handleNoDo :: RedoTarget -> IO ()
 handleNoDo target = do
   callDepth <- getCallDepth
-  exists <- doesFileExist $ relativePath target
-  if (callDepth == 0) || (not exists)
-    then throwIO . NoDoFileExist $ relativePath target
-    else createFile $ configPath </> fileName target
+  exists <- doesFileExist $ targetPath target
+  if callDepth == 0 || not exists
+    then throwIO . NoDoFileExist $ targetPath target
+    else createFile $ depFilePath target
 
 executeDo :: RedoTarget -> (String, FilePath) -> IO ()
 executeDo target (baseName, doFile) = do
-  createFile $ configPath </> doFile
-  tmpDeps <- createTempFile tempPath (fileName target)
-  tmpOut <- createTempFile tempPath (fileName target)
-  fileSignature doFile >>= addDeps tmpDeps doFile
+  doFileTarget <- redoTarget doFile
+  createFile $ depFilePath doFileTarget
+  tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target
+  tmpOut <- createTempFile tempPath . takeFileName $ targetPath target
+  fileSignature doFile >>= addDependency tmpDeps doFileTarget
   callDepth <- getCallDepth
   print $ cmds tmpDeps (callDepth + 1) tmpOut
   ph <- spawnCommand $ cmds tmpDeps (callDepth + 1) tmpOut
   ec <- waitForProcess ph
   case ec of
     ExitSuccess -> do
-      renameFile tmpOut $ relativePath target
-      renameFile tmpDeps $ (configPath <//> absolutePath target)
+      renameFile tmpOut $ targetPath target
+      renameFile tmpDeps $ depFilePath target
     ExitFailure err -> do
       removeFile tmpOut
       removeFile tmpDeps
@@ -167,11 +166,12 @@ executeDo target (baseName, doFile) = do
   where cmds tmpDeps callDepth tmpOut
           = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
                      "REDO_CALL_DEPTH=" ++ show callDepth,
-                     "sh -e", doFile, fileName target, baseName, tmpOut]
+                     "sh -e", quote doFile, quote $ targetPath target,
+                     quote baseName, quote tmpOut]
 
 listDoFiles :: RedoTarget -> [(String, FilePath)]
-listDoFiles target = (relativePath target, fileName target <.> "do") : defaultDos
-  where tokens = splitOn "." (fileName target)
+listDoFiles (RedoTarget target) = (target, takeFileName target <.> "do") : defaultDos
+  where tokens = splitOn "." (takeFileName target)
         defaultDos = map ((toBaseName *** toFileName) . (`splitAt` tokens)) [1..length tokens]
-        toBaseName xs = relativeDir target </> intercalate "." xs
+        toBaseName xs = normalise' $ takeDirectory target </> intercalate "." xs
         toFileName = intercalate "." . ("default":) . (++["do"])

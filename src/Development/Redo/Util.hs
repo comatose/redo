@@ -6,9 +6,6 @@ import System.Directory
 import System.FilePath
 import System.IO
 
-(<//>) :: FilePath -> FilePath -> FilePath
-x <//> y = normalise' $ x ++ (pathSeparator : y)
-
 pathWords :: FilePath -> [FilePath]
 pathWords = splitOn [pathSeparator]
 

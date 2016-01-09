@@ -1,0 +1,1 @@
+- All necessary .do files should exist in the directory where redo runs.
