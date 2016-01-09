@@ -16,6 +16,7 @@ import System.Exit
 import System.FilePath
 import System.IO
 import System.Process
+import Development.Redo.Utils
 
 configPath :: FilePath
 configPath = ".redo"
@@ -46,41 +47,61 @@ fileSignature f = handle
 addDeps :: FilePath -> FilePath -> Signature -> IO ()
 addDeps target dep sig = withFile target AppendMode (`hPutStrLn` show (dep, sig))
 
-data RedoTarget = RedoTarget {absoluteDir :: String, relativeDir :: String, baseName :: String} deriving (Show, Read)
+data RedoTarget = RedoTarget {absoluteDir :: String,
+                              relativeDir :: String,
+                              fileName :: String} deriving (Show, Read)
 
-redoTarget target = do
-  baseDir <- getCurrentDirectory
+redoTarget :: FilePath -> IO RedoTarget
+redoTarget target = (flip redoTargetFromDir) target <$> getCurrentDirectory
+
+redoTargetFromDir :: FilePath -> FilePath -> RedoTarget
+redoTargetFromDir baseDir target =
   if isRelative directory
-    then return $ RedoTarget (baseDir </> directory) directory targetName
-    else return $ RedoTarget directory (makeRelative baseDir directory) targetName
-  where targetName = takeBaseName target
+    then RedoTarget (baseDir </> directory) directory targetName
+    else RedoTarget directory (makeRelative' baseDir directory) targetName
+  where targetName = takeFileName target
         directory = takeDirectory target
 
 (<//>) :: FilePath -> FilePath -> FilePath
-x <//> y = normalise $ x ++ (pathSeparator : y)
+x <//> y = normalise' $ x ++ (pathSeparator : y)
 
-normaliseEx :: FilePath -> FilePath
-normaliseEx = normalise . intercalate [pathSeparator] . go . splitOn [pathSeparator]
+pathWords :: FilePath -> [FilePath]
+pathWords = splitOn [pathSeparator]
+
+pathUnwords :: [FilePath] -> FilePath
+pathUnwords = intercalate [pathSeparator]
+
+normalise' :: FilePath -> FilePath
+normalise' = normalise . pathUnwords . go . pathWords
   where go (_:"..":xs) = go xs
         go (x:xs) = x:go xs
         go [] = []
 
-makeRelativeEx :: FilePath -> FilePath -> FilePath
-makeRelativeEx baseDir f = intercalate [pathSeparator] $ go (splitOn [pathSeparator] baseDir) (splitOn [pathSeparator] $ takeDirectory f)
-
-go :: [FilePath] -> [FilePath] -> [FilePath]
-go [] [] = []
-go [] ys = ys
-go xs [] = replicate (length xs) ".."
-go xall@(x:xs) yall@(y:ys)
-  | x == y = go xs ys
-  | otherwise = replicate (length xall) ".." ++ yall
+makeRelative' :: FilePath -> FilePath -> FilePath
+makeRelative' baseDir f = dir </> takeFileName f
+  where dir = pathUnwords $ go (pathWords baseDir) (pathWords $ takeDirectory f)
+        go [] [] = []
+        go [] ys = ys
+        go xs [] = replicate (length xs) ".."
+        go xall@(x:xs) yall@(y:ys)
+          | x == y = go xs ys
+          | otherwise = replicate (length xall) ".." ++ yall
 
 absolutePath :: RedoTarget -> FilePath
-absolutePath target = absoluteDir target </> baseName target
+absolutePath target = absoluteDir target </> fileName target
 
 relativePath :: RedoTarget -> FilePath
-relativePath target = relativeDir target </> baseName target
+relativePath target = relativeDir target </> fileName target
+
+encodePath :: FilePath -> FilePath
+encodePath ('.':xs) = " ." ++ encodePath xs
+encodePath (x:xs) = x : encodePath xs
+encodePath [] = []
+
+decodePath :: FilePath -> FilePath
+decodePath (' ':'.':xs) = '.' : decodePath xs
+decodePath (x:xs) = x : decodePath xs
+decodePath [] = []
 
 main :: IO ()
 main = do
@@ -112,61 +133,58 @@ redo :: FilePath -> IO Signature
 redo f = do
   callDepth <- getCallDepth
   replicateM_ callDepth $ hPutChar stderr ' '
-  hPutStrLn stderr $ "redo  " ++ f
-  p <- upToDate f AnySignature
+  target <- redoTarget f
+  hPutStrLn stderr $ "redo  " ++ relativePath target
+  p <- upToDate target AnySignature
   if p
     then hPutStrLn stderr $ f ++ " is up to date."
-    else runDo f
+    else runDo target
          `catch`
          \e -> case e of
-           (NoDoFileExist target) -> hPutStrLn stderr $ "no rule to make " ++ quote target
+           (NoDoFileExist t) -> hPutStrLn stderr $ "no rule to make " ++ quote t
            (DoExitFailure err) -> hPutStrLn stderr $ f ++ " failed with exitcode " ++ show err
   fileSignature f
 
-upToDate :: FilePath -> Signature -> IO Bool
-upToDate file oldSig = do
-  newSig <- fileSignature file
+upToDate :: RedoTarget -> Signature -> IO Bool
+upToDate target oldSig = do
+  newSig <- fileSignature . relativePath $ target
   if oldSig /= newSig
     then return False
     else do
-      maybeDeps <- getDeps file
+      maybeDeps <- getDeps target
       case maybeDeps of
         (Just deps) -> if null deps
                        then return True
                        else and <$> mapM (uncurry upToDate) deps
         Nothing -> return False
 
-getDeps :: FilePath -> IO (Maybe [(FilePath, Signature)])
-getDeps f = handle
+getDeps :: RedoTarget -> IO (Maybe [(RedoTarget, Signature)])
+getDeps target = handle
   (\(_ :: SomeException) -> return Nothing)
-  (do f' <- canonicalizePath f
-      s <- readFile (configPath <//> f')
-      return . Just . map read . lines $ s)
-  -- (Just . map read . lines <$> readFile (configPath </> f))
+  (do dir <- getCurrentDirectory
+      depLines <- lines <$> readFile (configPath <//> absolutePath target)
+      return . Just . map ((\(f, s) -> (redoTargetFromDir dir f, s)) . read) $ depLines)
 
-runDo :: FilePath -> IO ()
+runDo :: RedoTarget -> IO ()
 runDo target = do
   doFiles <- filterM (doesFileExist . snd) (listDoFiles target)
   if null doFiles
     then handleNoDo target
     else executeDo target $ head doFiles
 
-handleNoDo :: FilePath -> IO ()
+handleNoDo :: RedoTarget -> IO ()
 handleNoDo target = do
   callDepth <- getCallDepth
-  if callDepth == 0
-    then throwIO $ NoDoFileExist target
-    else do
-      x <- doesFileExist target
-      if x
-        then createFile $ configPath </> target
-        else throwIO $ NoDoFileExist target
+  exists <- doesFileExist $ relativePath target
+  if (callDepth == 0) || (not exists)
+    then throwIO . NoDoFileExist $ relativePath target
+    else createFile $ configPath </> fileName target
 
-executeDo :: FilePath -> (String, FilePath) -> IO ()
+executeDo :: RedoTarget -> (String, FilePath) -> IO ()
 executeDo target (baseName, doFile) = do
   createFile $ configPath </> doFile
-  tmpDeps <- createTempFile tempPath (takeBaseName target)
-  tmpOut <- createTempFile tempPath (takeBaseName target)
+  tmpDeps <- createTempFile tempPath (fileName target)
+  tmpOut <- createTempFile tempPath (fileName target)
   fileSignature doFile >>= addDeps tmpDeps doFile
   callDepth <- getCallDepth
   print $ cmds tmpDeps (callDepth + 1) tmpOut
@@ -174,8 +192,8 @@ executeDo target (baseName, doFile) = do
   ec <- waitForProcess ph
   case ec of
     ExitSuccess -> do
-      renameFile tmpOut target
-      renameFile tmpDeps (configPath </> target)
+      renameFile tmpOut $ relativePath target
+      renameFile tmpDeps $ (configPath <//> absolutePath target)
     ExitFailure err -> do
       removeFile tmpOut
       removeFile tmpDeps
@@ -184,7 +202,7 @@ executeDo target (baseName, doFile) = do
   where cmds tmpDeps callDepth tmpOut
           = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
                      "REDO_CALL_DEPTH=" ++ show callDepth,
-                     "sh -e", doFile, target, baseName, tmpOut]
+                     "sh -e", doFile, fileName target, baseName, tmpOut]
 
 createFile :: FilePath -> IO ()
 createFile path = do
@@ -193,14 +211,15 @@ createFile path = do
   hClose h
 
 createTempFile :: FilePath -> String -> IO FilePath
-createTempFile path baseName = do
+createTempFile path name = do
   createDirectoryIfMissing True path
-  (f, h) <- openTempFile path baseName
+  (f, h) <- openTempFile path name
   hClose h
   return f
 
-listDoFiles :: FilePath -> [(String, FilePath)]
-listDoFiles target = (target, target <.> "do") : defaultDos
-  where tokens = splitOn "." target
-        defaultDos = map ((intercalate "." *** toFileName) . (`splitAt` tokens)) [1..length tokens]
+listDoFiles :: RedoTarget -> [(String, FilePath)]
+listDoFiles target = (relativePath target, fileName target <.> "do") : defaultDos
+  where tokens = splitOn "." (fileName target)
+        defaultDos = map ((toBaseName *** toFileName) . (`splitAt` tokens)) [1..length tokens]
+        toBaseName xs = relativeDir target </> intercalate "." xs
         toFileName = intercalate "." . ("default":) . (++["do"])
