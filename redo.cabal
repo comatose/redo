@@ -1,13 +1,13 @@
 name:                redo
-version:             0.2.0
-synopsis:            software build system, make replacement, implementation of djb's redo
-description:         redo builds a target file from source files using a "do" script. It also tracks when source files have changed and rebuilds target files as necessary.
-homepage:            https://github.com/jekor/redo
-bug-reports:         https://github.com/jekor/redo/issues
+version:             0.3.0
+synopsis:            A branch of jekor's redo
+description:         See https://github.com/jekor/redo for details.
+homepage:            https://github.com/comatose/redo
+bug-reports:         https://github.com/comatose/redo/issues
 license:             PublicDomain
 license-file:        LICENSE
-author:              Chris Forno (jekor)
-maintainer:          jekor@jekor.com
+author:              Boncheol Gu
+maintainer:          boncheol.gu@gmail.com
 category:            Distribution
 build-type:          Custom
 cabal-version:       >=1.8
@@ -15,16 +15,29 @@ tested-with:         GHC == 7.6.2
 
 source-repository    head
   type:              git
-  location:          git://github.com/jekor/redo.git
+  location:          git://github.com/comatose/redo.git
+
+
+library
+  hs-source-dirs:      src
+  build-depends:       base >= 4 && < 5,
+                       directory,
+                       filepath,
+                       split
+  exposed-modules:
+                  Development.Redo.Util
 
 executable redo
-  main-is:             redo.hs
+  hs-source-dirs:      src
+  main-is:             Main.hs
   build-depends:       base >= 4 && < 5,
                        bytestring,
                        containers >= 0.5,
                        directory,
                        filepath,
                        process,
-                       pureMD5
-  extensions:          ScopedTypeVariables
+                       pureMD5,
+                       split
+  extensions:          ScopedTypeVariables,
+                       DeriveDataTypeable
   ghc-options:         -Wall -fno-warn-missing-signatures

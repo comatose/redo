@@ -1,6 +1,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 
+module Main where
+
+import Development.Redo.Util
+
 import Control.Applicative
 import Control.Arrow
 import Control.Exception
@@ -16,7 +20,6 @@ import System.Exit
 import System.FilePath
 import System.IO
 import System.Process
-import Development.Redo.Utils
 
 configPath :: FilePath
 configPath = ".redo"
@@ -62,46 +65,11 @@ redoTargetFromDir baseDir target =
   where targetName = takeFileName target
         directory = takeDirectory target
 
-(<//>) :: FilePath -> FilePath -> FilePath
-x <//> y = normalise' $ x ++ (pathSeparator : y)
-
-pathWords :: FilePath -> [FilePath]
-pathWords = splitOn [pathSeparator]
-
-pathUnwords :: [FilePath] -> FilePath
-pathUnwords = intercalate [pathSeparator]
-
-normalise' :: FilePath -> FilePath
-normalise' = normalise . pathUnwords . go . pathWords
-  where go (_:"..":xs) = go xs
-        go (x:xs) = x:go xs
-        go [] = []
-
-makeRelative' :: FilePath -> FilePath -> FilePath
-makeRelative' baseDir f = dir </> takeFileName f
-  where dir = pathUnwords $ go (pathWords baseDir) (pathWords $ takeDirectory f)
-        go [] [] = []
-        go [] ys = ys
-        go xs [] = replicate (length xs) ".."
-        go xall@(x:xs) yall@(y:ys)
-          | x == y = go xs ys
-          | otherwise = replicate (length xall) ".." ++ yall
-
 absolutePath :: RedoTarget -> FilePath
 absolutePath target = absoluteDir target </> fileName target
 
 relativePath :: RedoTarget -> FilePath
 relativePath target = relativeDir target </> fileName target
-
-encodePath :: FilePath -> FilePath
-encodePath ('.':xs) = " ." ++ encodePath xs
-encodePath (x:xs) = x : encodePath xs
-encodePath [] = []
-
-decodePath :: FilePath -> FilePath
-decodePath (' ':'.':xs) = '.' : decodePath xs
-decodePath (x:xs) = x : decodePath xs
-decodePath [] = []
 
 main :: IO ()
 main = do
@@ -125,9 +93,6 @@ getCallDepth :: IO Int
 getCallDepth = handle
   (\(_ :: SomeException) -> return 0)
   (read <$> getEnv "REDO_CALL_DEPTH")
-
-quote :: String -> String
-quote s = '\'' : s ++ "'"
 
 redo :: FilePath -> IO Signature
 redo f = do
@@ -203,19 +168,6 @@ executeDo target (baseName, doFile) = do
           = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
                      "REDO_CALL_DEPTH=" ++ show callDepth,
                      "sh -e", doFile, fileName target, baseName, tmpOut]
-
-createFile :: FilePath -> IO ()
-createFile path = do
-  createDirectoryIfMissing True (takeDirectory path)
-  h <- openFile path WriteMode
-  hClose h
-
-createTempFile :: FilePath -> String -> IO FilePath
-createTempFile path name = do
-  createDirectoryIfMissing True path
-  (f, h) <- openTempFile path name
-  hClose h
-  return f
 
 listDoFiles :: RedoTarget -> [(String, FilePath)]
 listDoFiles target = (relativePath target, fileName target <.> "do") : defaultDos
