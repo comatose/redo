@@ -59,8 +59,16 @@ main = do
 getDepsPath :: IO (Maybe String)
 getDepsPath = lookupEnv "REDO_DEPS_PATH"
 
+getCallDepth :: IO Int
+getCallDepth = handle
+  (\(_ :: SomeException) -> return 0)
+  (read <$> getEnv "REDO_CALL_DEPTH")
+
 redo :: FilePath -> IO Signature
 redo f = do
+  callDepth <- getCallDepth
+  let indent = replicate callDepth ' '
+  hPutStr stderr indent
   p <- upToDate f AnySignature
   if p
     then hPutStrLn stderr (f ++ " is up to date.")
@@ -105,12 +113,14 @@ executeDo target (baseName, doFile) = do
   tmpOut <- createTempFile tempPath target
   fileSignature doFile >>= addDeps tmpDeps doFile
   hPutStrLn stderr $ "runDo " ++ doFile
-  callCommand $ cmds tmpDeps tmpOut
+  callDepth <- getCallDepth
+  callCommand $ cmds tmpDeps (callDepth + 1) tmpOut
   renameFile tmpOut target
   renameFile tmpDeps (configPath </> target)
   return True
-    where cmds tmpDeps tmpOut
+    where cmds tmpDeps callDepth tmpOut
             = unwords ["REDO_DEPS_PATH='" ++ tmpDeps ++ "'",
+                       "REDO_CALL_DEPTH=" ++ show callDepth ++ "",
                        "sh -ex", doFile, target, baseName, tmpOut]
 
 createFile :: FilePath -> IO ()
