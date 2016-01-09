@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 
 import Control.Applicative
 import Control.Arrow
@@ -8,8 +9,10 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.Digest.Pure.MD5 as MD5
 import Data.List
 import Data.List.Split
+import Data.Typeable
 import System.Directory
 import System.Environment
+import System.Exit
 import System.FilePath
 import System.IO
 import System.Process
@@ -27,6 +30,13 @@ instance Eq Signature where
   NoSignature == _ = False
   _ == NoSignature = False
   _ == _ = True
+
+data RedoException =
+  NoDoFileExist FilePath |
+  DoExitFailure Int
+  deriving (Show, Typeable)
+
+instance Exception RedoException
 
 fileSignature :: FilePath -> IO Signature
 fileSignature f = handle
@@ -64,18 +74,22 @@ getCallDepth = handle
   (\(_ :: SomeException) -> return 0)
   (read <$> getEnv "REDO_CALL_DEPTH")
 
+quote :: String -> String
+quote s = '\'' : s ++ "'"
+
 redo :: FilePath -> IO Signature
 redo f = do
   callDepth <- getCallDepth
-  let indent = replicate callDepth ' '
-  hPutStr stderr indent
+  replicateM_ callDepth $ hPutChar stderr ' '
+  hPutStrLn stderr $ "redo  " ++ f
   p <- upToDate f AnySignature
   if p
-    then hPutStrLn stderr (f ++ " is up to date.")
-    else do
-      hPutStrLn stderr $ "redo " ++ f
-      r <- runDo f
-      unless r $ error "Failed."
+    then hPutStrLn stderr $ f ++ " is up to date."
+    else runDo f
+         `catch`
+         \e -> case e of
+           (NoDoFileExist target) -> hPutStrLn stderr $ "no rule to make " ++ quote target
+           (DoExitFailure err) -> hPutStrLn stderr $ f ++ " failed with exitcode " ++ show err
   fileSignature f
 
 upToDate :: FilePath -> Signature -> IO Bool
@@ -91,37 +105,46 @@ upToDate file oldSig = do
                        else and <$> mapM (uncurry upToDate) deps
         Nothing -> return False
 
-runDo :: FilePath -> IO Bool
+runDo :: FilePath -> IO ()
 runDo target = do
   doFiles <- filterM (doesFileExist . snd) (listDoFiles target)
   if null doFiles
     then handleNoDo target
     else executeDo target $ head doFiles
 
-handleNoDo :: FilePath -> IO Bool
+handleNoDo :: FilePath -> IO ()
 handleNoDo target = do
-  x <- doesFileExist target
-  if x
-    then do createFile $ configPath </> target
-            return True
-    else return False
+  callDepth <- getCallDepth
+  if callDepth == 0
+    then throwIO $ NoDoFileExist target
+    else do
+      x <- doesFileExist target
+      if x
+        then createFile $ configPath </> target
+        else throwIO $ NoDoFileExist target
 
-executeDo :: FilePath -> (String, FilePath) -> IO Bool
+executeDo :: FilePath -> (String, FilePath) -> IO ()
 executeDo target (baseName, doFile) = do
   createFile $ configPath </> doFile
   tmpDeps <- createTempFile tempPath target
   tmpOut <- createTempFile tempPath target
   fileSignature doFile >>= addDeps tmpDeps doFile
-  hPutStrLn stderr $ "runDo " ++ doFile
   callDepth <- getCallDepth
-  callCommand $ cmds tmpDeps (callDepth + 1) tmpOut
-  renameFile tmpOut target
-  renameFile tmpDeps (configPath </> target)
-  return True
-    where cmds tmpDeps callDepth tmpOut
-            = unwords ["REDO_DEPS_PATH='" ++ tmpDeps ++ "'",
-                       "REDO_CALL_DEPTH=" ++ show callDepth ++ "",
-                       "sh -ex", doFile, target, baseName, tmpOut]
+  ph <- spawnCommand $ cmds tmpDeps (callDepth + 1) tmpOut
+  ec <- waitForProcess ph
+  case ec of
+    ExitSuccess -> do
+      renameFile tmpOut target
+      renameFile tmpDeps (configPath </> target)
+    ExitFailure err -> do
+      removeFile tmpOut
+      removeFile tmpDeps
+      throwIO $ DoExitFailure err
+
+  where cmds tmpDeps callDepth tmpOut
+          = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
+                     "REDO_CALL_DEPTH=" ++ show callDepth,
+                     "sh -e", doFile, target, baseName, tmpOut]
 
 createFile :: FilePath -> IO ()
 createFile path = do
