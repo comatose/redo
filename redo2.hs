@@ -45,7 +45,7 @@ main :: IO ()
 main = do
   cmd <- getProgName
   case cmd of
-    "redo2" -> getArgs >>= mapM_ redo
+    "redo" -> getArgs >>= mapM_ redo
     "redo-ifchange" -> do
       maybeDepsPath <- getDepsPath
       case maybeDepsPath of
@@ -54,7 +54,7 @@ main = do
           sigs <- mapM redo deps
           zipWithM_ (addDeps depsPath) deps sigs
         Nothing -> return ()
-    _ -> return ()
+    _ -> hPrint stderr $ "unknown command: " ++ cmd
 
 getDepsPath :: IO (Maybe String)
 getDepsPath = lookupEnv "REDO_DEPS_PATH"
