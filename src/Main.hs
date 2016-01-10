@@ -29,9 +29,37 @@ configPath = ".redo"
 tempPath :: FilePath
 tempPath = configPath </> "tmp"
 
+-- | This is the directory where lock files are created.
+lockPath :: FilePath
+lockPath = configPath </> "lock"
+
+-- | This locks the target.
+-- If already locked, this returns False.
+lockTarget :: RedoTarget -> IO Bool
+lockTarget (RedoTarget file) = do
+  locked <- doesFileExist lockFile
+  if locked
+    then return False
+    else createFile lockFile >> return True
+  where lockFile = lockPath </> encodePath file
+
+-- | This unlocks the target.
+unlockTarget :: RedoTarget -> IO ()
+unlockTarget (RedoTarget file) = handle
+  (\(_ :: SomeException) -> return ())
+  (removeFile $ lockPath </> encodePath file)
+
+-- | This clears all of the target locks.
+clearLocks :: IO ()
+clearLocks = handle
+  (\(_ :: SomeException) -> return ())
+  (removeDirectoryRecursive lockPath)
+
 data RedoException =
-  NoDoFileExist FilePath |    -- ^ No .do files exist for the target.
-  DoExitFailure Int           -- ^ .do script fails with the exit code.
+  NoDoFileExist FilePath |     -- ^ No .do files exist for the target.
+  DoExitFailure FilePath Int | -- ^ .do script fails with the exit code.
+  CyclicDependency FilePath |  -- ^ cyclic dependency detected for the target.
+  TargetNotGenerated FilePath
   deriving (Show, Typeable)
 
 instance Exception RedoException
@@ -89,31 +117,43 @@ redoTargetFromDir baseDir target =
     else RedoTarget $ makeRelative' baseDir target'
   where target' = normalise' target
 
+
 main :: IO ()
-main = do
-  dir <- getCurrentDirectory
-  cmd <- getProgName
-  -- Redo targets are created from the arguments.
-  targets <- map (redoTargetFromDir dir) <$> getArgs
-  -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
-  -- with a file path given via an environment variable.
-  -- The file is used to store the dependency information.
-  maybeDepsPath <- getDepsPath
-  case cmd of
-    "redo" -> mapM_ redo targets
-    "redo-ifchange" -> do
-      -- Signature values of targets will be stored as dependency information.
-      sigs <- mapM redo targets
-      case maybeDepsPath of
-        (Just depsPath) -> do
-          let deps = zipWith (\t s -> ExistingDependency (targetPath t) s) targets sigs
-          mapM_ (addDependency depsPath) deps
-        Nothing -> return ()
-    "redo-ifcreate" ->
-      case maybeDepsPath of
-        (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency . targetPath) targets
-        Nothing -> return ()
-    _ -> hPrint stderr $ "unknown command: " ++ cmd
+main = (initialize >> main')
+  `catch`
+  \e -> case e of
+    (NoDoFileExist t) -> hPutStrLn stderr $ "no rule to make " ++ quote t
+    (DoExitFailure t err) -> hPutStrLn stderr $ t ++ " failed with exitcode " ++ show err
+    (CyclicDependency f) -> hPutStrLn stderr $ "cyclic dependency detected for " ++ f
+    (TargetNotGenerated f) -> hPutStrLn stderr $ f ++ " was not generated"
+  where
+    initialize = do
+      callDepth <- getCallDepth
+      when (callDepth == 0) clearLocks
+    main' = do
+      dir <- getCurrentDirectory
+      cmd <- getProgName
+      -- Redo targets are created from the arguments.
+      targets <- map (redoTargetFromDir dir) <$> getArgs
+      -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
+      -- with a file path given via an environment variable.
+      -- The file is used to store the dependency information.
+      maybeDepsPath <- getDepsPath
+      case cmd of
+        "redo" -> mapM_ redo targets
+        "redo-ifchange" -> do
+          -- Signature values of targets will be stored as dependency information.
+          sigs <- mapM redo targets
+          case maybeDepsPath of
+            (Just depsPath) -> do
+              let deps = zipWith (\t s -> ExistingDependency (targetPath t) s) targets sigs
+              mapM_ (addDependency depsPath) deps
+            Nothing -> return ()
+        "redo-ifcreate" ->
+          case maybeDepsPath of
+            (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency . targetPath) targets
+            Nothing -> return ()
+        _ -> hPrint stderr $ "unknown command: " ++ cmd
 
 -- | This returns a file path for storing dependencies,
 -- if the current process is spawned during the execution of other do scripts.
@@ -133,18 +173,26 @@ redo :: RedoTarget
 redo target = do
   callDepth <- getCallDepth
   let indent = replicate callDepth ' '
-  hPutStrLn stderr $ indent ++ "redo  " ++ targetPath target
-  p <- upToDate $ ExistingDependency (targetPath target) AnySignature
-  if p
-    then hPutStrLn stderr $ targetPath target ++ " is up to date."
+  hPutStrLn stderr $ indent ++ "redo  " ++ targetFile
+  -- Try to lock the target, if False returns, it means that cyclic dependency exists.
+  lockAcquired <- lockTarget target
+  unless lockAcquired . throwIO $ CyclicDependency targetFile
+  unchanged <- upToDate $ ExistingDependency targetFile AnySignature
+  if unchanged
+    then hPutStrLn stderr $ targetFile ++ " is up to date."
     -- Run a do script unless it is up to date.
     else runDo target
          `catch`
          \e -> case e of
            (NoDoFileExist t) -> hPutStrLn stderr $ "no rule to make " ++ quote t
-           (DoExitFailure err) -> hPutStrLn stderr $
-             targetPath target ++ " failed with exitcode " ++ show err
-  fileSignature $ targetPath target
+           (DoExitFailure t err) -> hPutStrLn stderr $ t ++ " failed with exitcode " ++ show err
+           other -> throwIO other
+  unlockTarget target
+  sig <- fileSignature targetFile
+  case sig of
+    NoSignature -> throwIO $ TargetNotGenerated targetFile
+    _ -> return sig
+  where targetFile = targetPath target
 
 -- | This recursively visits its dependencies to test whether it is up to date.
 upToDate :: Dependency
@@ -152,6 +200,7 @@ upToDate :: Dependency
 upToDate (ExistingDependency f oldSig) = do
   newSig <- fileSignature f
   -- first, check if the target has been changed.
+  -- print (f, oldSig, newSig)
   if oldSig /= newSig
     then return False
     else do
@@ -217,8 +266,8 @@ executeDo target (baseName, doFile) = do
     ExitSuccess -> do
       -- Try to rename temporary files to actual names.
       -- If 'tmpOut' is unused, delete it.
-      modified <- (timeCreated /=) <$> getModificationTime tmpOut
-      if modified
+      timeGenerated <- getModificationTime tmpOut
+      if timeCreated /= timeGenerated
         then moveFile tmpOut $ targetPath target
         else removeFile tmpOut
       moveFile tmpDeps $ depFilePath target
@@ -226,7 +275,7 @@ executeDo target (baseName, doFile) = do
       -- Remove temporary files.
       removeFile tmpOut
       removeFile tmpDeps
-      throwIO $ DoExitFailure err
+      throwIO $ DoExitFailure (targetPath target) err
 
   where cmds tmpDeps callDepth tmpOut
           = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,

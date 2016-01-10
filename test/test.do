@@ -1,9 +1,9 @@
 #!/usr/bin/sh
 OUT_PATH=$(dirname $2)
 ./redo-ifchange ${OUT_PATH}/test-sub1 ${OUT_PATH}/test-sub2
-if [ ! -f flags ]; then
-    ./redo-ifcreate flags
-else
+if [ -f flags ]; then
     ./redo-ifchange flags
+else
+    ./redo-ifcreate flags
 fi
-echo $1 $2 > $3
+echo $0 $1 $2 > $3
