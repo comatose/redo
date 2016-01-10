@@ -37,9 +37,9 @@ data RedoException =
 instance Exception RedoException
 
 data Signature =
-  NoSignature |               -- ^ for non-existing files
-  AnySignature |              -- ^ the wild-card signature which matches any signatures
-  Signature String            -- ^ the normal signature containing the MD5 value.
+  NoSignature |        -- ^ for non-existing files
+  AnySignature |       -- ^ the wild-card signature which matches any signatures
+  Signature String     -- ^ the normal signature containing the MD5 value.
   deriving (Show, Read)
 
 instance Eq Signature where
@@ -48,6 +48,11 @@ instance Eq Signature where
   _ == NoSignature = False
   _ == _ = True
 
+data Dependency =
+  NonExistingDependency FilePath |      -- ^ non existing dependency issued by `redo-ifcreate`
+  ExistingDependency FilePath Signature -- ^ existing dependency
+  deriving (Show, Read)
+
 -- | Return the signature of a file.
 fileSignature :: FilePath -> IO Signature
 fileSignature f = handle
@@ -55,13 +60,11 @@ fileSignature f = handle
   (\(_ :: SomeException) -> return NoSignature)
   (Signature . show . MD5.md5 <$> BL.readFile f)
 
--- | Add a dependency pair (a file path and its signature) into a file.
-addDependency :: FilePath    -- ^ the file which a dependency will be appended to
-              -> RedoTarget  -- ^ the file of dependency
-              -> Signature   -- ^ the signature
+-- | Add a dependency entry into a file.
+addDependency :: FilePath   -- ^ the file which a dependency will be appended to
+              -> Dependency -- ^ the dependency
               -> IO ()
-addDependency depsFile dep sig =
-  withFile depsFile AppendMode (`hPutStrLn` show (targetPath dep, sig))
+addDependency depsFile dep = withFile depsFile AppendMode (`hPrint` dep)
 
 -- | A type for redo targets
 -- This should be constructed from 'redoTarget' or 'redoTargetFromDir'.
@@ -92,17 +95,23 @@ main = do
   cmd <- getProgName
   -- Redo targets are created from the arguments.
   targets <- map (redoTargetFromDir dir) <$> getArgs
+  -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
+  -- with a file path given via an environment variable.
+  -- The file is used to store the dependency information.
+  maybeDepsPath <- getDepsPath
   case cmd of
     "redo" -> mapM_ redo targets
     "redo-ifchange" -> do
       -- Signature values of targets will be stored as dependency information.
       sigs <- mapM redo targets
-      -- `redo-ifchange` is spawned from another `redo` process
-      -- with a file path given via an environment variable.
-      -- The file is used to store the dependency information.
-      maybeDepsPath <- getDepsPath
       case maybeDepsPath of
-        (Just depsPath) -> zipWithM_ (addDependency depsPath) targets sigs
+        (Just depsPath) -> do
+          let deps = zipWith (\t s -> ExistingDependency (targetPath t) s) targets sigs
+          mapM_ (addDependency depsPath) deps
+        Nothing -> return ()
+    "redo-ifcreate" ->
+      case maybeDepsPath of
+        (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency . targetPath) targets
         Nothing -> return ()
     _ -> hPrint stderr $ "unknown command: " ++ cmd
 
@@ -125,10 +134,10 @@ redo target = do
   callDepth <- getCallDepth
   let indent = replicate callDepth ' '
   hPutStrLn stderr $ indent ++ "redo  " ++ targetPath target
-  p <- upToDate target AnySignature
+  p <- upToDate $ ExistingDependency (targetPath target) AnySignature
   if p
     then hPutStrLn stderr $ targetPath target ++ " is up to date."
-         -- Run a do script unless it is up to date.
+    -- Run a do script unless it is up to date.
     else runDo target
          `catch`
          \e -> case e of
@@ -138,15 +147,15 @@ redo target = do
   fileSignature $ targetPath target
 
 -- | This recursively visits its dependencies to test whether it is up to date.
-upToDate :: RedoTarget   -- ^ the target
-         -> Signature    -- ^ its old signature
+upToDate :: Dependency
          -> IO Bool
-upToDate target oldSig = do
-  newSig <- fileSignature . targetPath $ target
+upToDate (ExistingDependency f oldSig) = do
+  newSig <- fileSignature f
   -- first, check if the target has been changed.
   if oldSig /= newSig
     then return False
     else do
+      target <- redoTarget f
       maybeDeps <- getDependencies target
       -- print (target, maybeDeps)
       case maybeDeps of
@@ -155,7 +164,8 @@ upToDate target oldSig = do
         Nothing -> return False
         (Just deps) -> if null deps
                        then return True  -- Leaf target
-                       else and <$> mapM (uncurry upToDate) deps
+                       else and <$> mapM upToDate deps
+upToDate (NonExistingDependency f) = not <$> doesFileExist f
 
 -- | This composes a file path to store dependencies.
 depFilePath :: RedoTarget -> FilePath
@@ -163,12 +173,11 @@ depFilePath target = configPath </> encodePath (targetPath target)
 
 -- | This returns a list of dependencies, i.e. a file path and the signature.
 getDependencies :: RedoTarget
-                -> IO (Maybe [(RedoTarget, Signature)])
+                -> IO (Maybe [Dependency])
 getDependencies target = handle
   (\(_ :: SomeException) -> return Nothing)
-  (do dir <- getCurrentDirectory
-      depLines <- lines <$> readFile (depFilePath target)
-      return . Just . map (first (redoTargetFromDir dir) . read) $ depLines)
+  (do depLines <- lines <$> readFile (depFilePath target)
+      return . Just . map read $ depLines)
 
 -- | This finds an appropriate do script and runs it if it exists.
 runDo :: RedoTarget -> IO ()
@@ -197,7 +206,8 @@ executeDo target (baseName, doFile) = do
   tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target
   tmpOut <- createTempFile tempPath . takeFileName $ targetPath target
   -- Add the do file itself as a dependency.
-  fileSignature doFile >>= addDependency tmpDeps doFileTarget
+  doSig <- fileSignature doFile
+  addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
   callDepth <- getCallDepth
   -- print $ cmds tmpDeps (callDepth + 1) tmpOut
   ph <- spawnCommand $ cmds tmpDeps (callDepth + 1) tmpOut
