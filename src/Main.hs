@@ -161,7 +161,7 @@ upToDate target oldSig = do
 depFilePath :: RedoTarget -> FilePath
 depFilePath target = configPath </> encodePath (targetPath target)
 
--- | This returns a list of dependencies.
+-- | This returns a list of dependencies, i.e. a file path and the signature.
 getDependencies :: RedoTarget
                 -> IO (Maybe [(RedoTarget, Signature)])
 getDependencies target = handle
@@ -170,37 +170,45 @@ getDependencies target = handle
       depLines <- lines <$> readFile (depFilePath target)
       return . Just . map (first (redoTargetFromDir dir) . read) $ depLines)
 
+-- | This finds an appropriate do script and runs it if it exists.
 runDo :: RedoTarget -> IO ()
 runDo target = do
   doFiles <- filterM (doesFileExist . snd) (listDoFiles target)
   if null doFiles
-    then handleNoDo target
+    then handleNoDo
     else executeDo target $ head doFiles
+  where handleNoDo = do
+          callDepth <- getCallDepth
+          exists <- doesFileExist $ targetPath target
+          if callDepth == 0 || not exists
+            then throwIO . NoDoFileExist $ targetPath target
+            else createFile $ depFilePath target
 
-handleNoDo :: RedoTarget -> IO ()
-handleNoDo target = do
-  callDepth <- getCallDepth
-  exists <- doesFileExist $ targetPath target
-  if callDepth == 0 || not exists
-    then throwIO . NoDoFileExist $ targetPath target
-    else createFile $ depFilePath target
-
-executeDo :: RedoTarget -> (String, FilePath) -> IO ()
+-- | This executes the do script.
+executeDo :: RedoTarget
+          -> (String, FilePath)   -- ^ the redo's $2 argument and the do script
+          -> IO ()
 executeDo target (baseName, doFile) = do
   doFileTarget <- redoTarget doFile
+  -- Mark the do file is tracked by redo.
   createFile $ depFilePath doFileTarget
+  -- This creates 2 temporary files to store dependencies and an output target.
+  -- Those will be renamed to real names after the do script completes.
   tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target
   tmpOut <- createTempFile tempPath . takeFileName $ targetPath target
+  -- Add the do file itself as a dependency.
   fileSignature doFile >>= addDependency tmpDeps doFileTarget
   callDepth <- getCallDepth
-  print $ cmds tmpDeps (callDepth + 1) tmpOut
+  -- print $ cmds tmpDeps (callDepth + 1) tmpOut
   ph <- spawnCommand $ cmds tmpDeps (callDepth + 1) tmpOut
   ec <- waitForProcess ph
   case ec of
     ExitSuccess -> do
+      -- Rename temporary files to actual names.
       moveFile tmpOut $ targetPath target
       moveFile tmpDeps $ depFilePath target
     ExitFailure err -> do
+      -- Remove temporary files.
       removeFile tmpOut
       removeFile tmpDeps
       throwIO $ DoExitFailure err
@@ -211,6 +219,10 @@ executeDo target (baseName, doFile) = do
                      "sh -e", quote doFile, quote $ targetPath target,
                      quote baseName, quote tmpOut]
 
+-- | This lists all applicable do files and redo's $2 names.
+-- e.g.
+-- > listDoFiles "a.b.c"
+-- [("a.b.c","a.b.c.do"),("a","default.b.c.do"),("a.b","default.c.do"),("a.b.c","default.do")]
 listDoFiles :: RedoTarget -> [(String, FilePath)]
 listDoFiles (RedoTarget target) = (target, takeFileName target <.> "do") : defaultDos
   where tokens = splitOn "." (takeFileName target)
