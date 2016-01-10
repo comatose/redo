@@ -203,8 +203,9 @@ executeDo target (baseName, doFile) = do
   createFile $ depFilePath doFileTarget
   -- This creates 2 temporary files to store dependencies and an output target.
   -- Those will be renamed to real names after the do script completes.
-  tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target
-  tmpOut <- createTempFile tempPath . takeFileName $ targetPath target
+  tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target ++ ".deps"
+  tmpOut <- createTempFile tempPath . takeFileName $ targetPath target ++ ".out"
+  timeCreated <- getModificationTime tmpOut
   -- Add the do file itself as a dependency.
   doSig <- fileSignature doFile
   addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
@@ -214,8 +215,12 @@ executeDo target (baseName, doFile) = do
   ec <- waitForProcess ph
   case ec of
     ExitSuccess -> do
-      -- Rename temporary files to actual names.
-      moveFile tmpOut $ targetPath target
+      -- Try to rename temporary files to actual names.
+      -- If 'tmpOut' is unused, delete it.
+      modified <- (timeCreated /=) <$> getModificationTime tmpOut
+      if modified
+        then moveFile tmpOut $ targetPath target
+        else removeFile tmpOut
       moveFile tmpDeps $ depFilePath target
     ExitFailure err -> do
       -- Remove temporary files.
