@@ -33,6 +33,10 @@ tempPath = configPath </> "tmp"
 lockPath :: FilePath
 lockPath = configPath </> "lock"
 
+-- | This is the directory where temporary output files are created.
+tempOutPath :: FilePath
+tempOutPath = tempPath </> "out"
+
 -- | This locks the target.
 -- If already locked, this returns False.
 lockTarget :: RedoTarget -> IO Bool
@@ -50,10 +54,20 @@ unlockTarget (RedoTarget file) = handle
   (removeFile $ lockPath </> encodePath file)
 
 -- | This clears all of the target locks.
-clearLocks :: IO ()
-clearLocks = handle
+clearGarbage :: IO ()
+clearGarbage = handle
   (\(_ :: SomeException) -> return ())
-  (removeDirectoryRecursive lockPath)
+  (removeDirectoryRecursive lockPath >>
+   removeDirectoryRecursive tempPath)
+
+-- | This returns a temp. file path for the target.
+-- This also creates directories for it.
+-- This doesn't create the temp. file.
+tempOutFilePath :: RedoTarget -> IO FilePath
+tempOutFilePath target = do
+  createDirectoryIfMissing True $ takeDirectory filePath
+  return filePath
+  where filePath = tempOutPath </> encodePath (targetPath target)
 
 data RedoException =
   NoDoFileExist FilePath |     -- ^ No .do files exist for the target.
@@ -129,7 +143,7 @@ main = (initialize >> main')
   where
     initialize = do
       callDepth <- getCallDepth
-      when (callDepth == 0) clearLocks
+      when (callDepth == 0) clearGarbage
     main' = do
       dir <- getCurrentDirectory
       cmd <- getProgName
@@ -250,11 +264,9 @@ executeDo target (baseName, doFile) = do
   doFileTarget <- redoTarget doFile
   -- Mark the do file is tracked by redo.
   createFile $ depFilePath doFileTarget
-  -- This creates 2 temporary files to store dependencies and an output target.
-  -- Those will be renamed to real names after the do script completes.
+  -- Create a temporary file to store dependencies.
   tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target ++ ".deps"
-  tmpOut <- createTempFile tempPath . takeFileName $ targetPath target ++ ".out"
-  timeCreated <- getModificationTime tmpOut
+  tmpOut <- tempOutFilePath target
   -- Add the do file itself as a dependency.
   doSig <- fileSignature doFile
   addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
@@ -264,12 +276,9 @@ executeDo target (baseName, doFile) = do
   ec <- waitForProcess ph
   case ec of
     ExitSuccess -> do
-      -- Try to rename temporary files to actual names.
-      -- If 'tmpOut' is unused, delete it.
-      timeGenerated <- getModificationTime tmpOut
-      if timeCreated /= timeGenerated
-        then moveFile tmpOut $ targetPath target
-        else removeFile tmpOut
+      -- Rename temporary files to actual names, if any exists.
+      built <- doesFileExist tmpOut
+      when built $ moveFile tmpOut (targetPath target)
       moveFile tmpDeps $ depFilePath target
     ExitFailure err -> do
       -- Remove temporary files.
