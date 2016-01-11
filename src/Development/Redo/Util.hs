@@ -58,3 +58,13 @@ moveFile :: FilePath -> FilePath -> IO ()
 moveFile src trg = do
   createDirectoryIfMissing True $ takeDirectory trg
   renameFile src trg
+
+spanM :: Monad m => (a -> m Bool) -> [a] -> m ([a], [a])
+spanM _ [] = return ([], [])
+spanM p xall@(x:xs) = do
+  p' <- p x
+  if p'
+    then do
+      (ys, zs) <- spanM p xs
+      return (x:ys, zs)
+    else return ([], xall)

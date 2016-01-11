@@ -53,7 +53,7 @@ unlockTarget (RedoTarget file) = handle
   (\(_ :: SomeException) -> return ())
   (removeFile $ lockPath </> encodePath file)
 
--- | This clears all of the target locks.
+-- | This clears temporary files.
 clearGarbage :: IO ()
 clearGarbage = handle
   (\(_ :: SomeException) -> return ())
@@ -245,35 +245,22 @@ getDependencies target = handle
 -- | This finds an appropriate do script and runs it if it exists.
 runDo :: RedoTarget -> IO ()
 runDo target = do
-  doFiles <- filterM (doesFileExist . snd) (listDoFiles target)
-  if null doFiles
-    then handleNoDo
-    else executeDo target $ head doFiles
-  where handleNoDo = do
-          callDepth <- getCallDepth
-          exists <- doesFileExist $ targetPath target
-          if callDepth == 0 || not exists
-            then throwIO . NoDoFileExist $ targetPath target
-            else createFile $ depFilePath target
-
--- | This executes the do script.
-executeDo :: RedoTarget
-          -> (String, FilePath)   -- ^ the redo's $2 argument and the do script
-          -> IO ()
-executeDo target (baseName, doFile) = do
-  doFileTarget <- redoTarget doFile
-  -- Mark the do file is tracked by redo.
-  createFile $ depFilePath doFileTarget
+  -- get absent and existing lists of applicable do files.
+  (neDoFiles, doFiles) <- spanM (fileAbsent . snd) (listDoFiles target)
+  callDepth <- getCallDepth
+  exists <- doesFileExist $ targetPath target
+  when (null doFiles && (callDepth == 0 || not exists))
+       (throwIO . NoDoFileExist $ targetPath target)
   -- Create a temporary file to store dependencies.
   tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target ++ ".deps"
   tmpOut <- tempOutFilePath target
-  -- Add the do file itself as a dependency.
-  doSig <- fileSignature doFile
-  addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
-  callDepth <- getCallDepth
-  -- print $ cmds tmpDeps (callDepth + 1) tmpOut
-  ph <- spawnCommand $ cmds tmpDeps (callDepth + 1) tmpOut
-  ec <- waitForProcess ph
+  -- Add more preferable, but absent, do files for the target as non-existing dependencies.
+  mapM_ (addDependency tmpDeps . NonExistingDependency . snd) neDoFiles
+  ec <- if null doFiles
+        -- this it the case where no appropriate do file exists,
+        -- but the target already exists.
+        then return ExitSuccess
+        else executeDo target tmpDeps tmpOut (callDepth + 1) $ head doFiles
   case ec of
     ExitSuccess -> do
       -- Rename temporary files to actual names, if any exists.
@@ -285,12 +272,29 @@ executeDo target (baseName, doFile) = do
       removeFile tmpOut
       removeFile tmpDeps
       throwIO $ DoExitFailure (targetPath target) err
+ where fileAbsent f = not <$> doesFileExist f
 
-  where cmds tmpDeps callDepth tmpOut
-          = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
-                     "REDO_CALL_DEPTH=" ++ show callDepth,
-                     "sh -e", quote doFile, quote $ targetPath target,
-                     quote baseName, quote tmpOut]
+-- | This executes the do script.
+executeDo :: RedoTarget
+             -> FilePath           -- ^ temporary file for storing dependencies
+             -> FilePath           -- ^ temporary file for output (redo's $3 argument)
+             -> Int                -- ^ call depth
+             -> (String, FilePath) -- ^ the redo's $2 argument and the do script
+             -> IO ExitCode
+executeDo target tmpDeps tmpOut callDepth (baseName, doFile) = do
+  doFileTarget <- redoTarget doFile
+  -- Mark the do file is tracked by redo.
+  createFile $ depFilePath doFileTarget
+  -- Add the do file itself as a dependency.
+  doSig <- fileSignature doFile
+  addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
+  -- print $ cmds tmpDeps (callDepth + 1) tmpOut
+  ph <- spawnCommand cmds
+  waitForProcess ph
+ where cmds = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
+                       "REDO_CALL_DEPTH=" ++ show callDepth,
+                       "sh -e", quote doFile, quote $ targetPath target,
+                       quote baseName, quote tmpOut]
 
 -- | This lists all applicable do files and redo's $2 names.
 -- e.g.
