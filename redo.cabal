@@ -24,8 +24,9 @@ library
                        directory,
                        filepath,
                        split
+  extensions:          ScopedTypeVariables
   exposed-modules:
-                  Development.Redo.Util
+                       Development.Redo.Util
 
 executable redo
   hs-source-dirs:      src

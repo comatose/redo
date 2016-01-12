@@ -21,6 +21,32 @@ import System.FilePath
 import System.IO
 import System.Process
 
+data RedoException =
+  NoDoFileExist FilePath |     -- ^ No .do files exist for the target.
+  DoExitFailure FilePath Int | -- ^ .do script fails with the exit code.
+  CyclicDependency FilePath |  -- ^ cyclic dependency detected for the target.
+  TargetNotGenerated FilePath
+  deriving (Show, Typeable)
+
+instance Exception RedoException
+
+data Signature =
+  NoSignature |        -- ^ for non-existing files
+  AnySignature |       -- ^ the wild-card signature which matches any signatures
+  Signature String     -- ^ the normal signature containing the MD5 value.
+  deriving (Show, Read)
+
+instance Eq Signature where
+  (Signature x) == (Signature y) = x == y
+  NoSignature == _ = False
+  _ == NoSignature = False
+  _ == _ = True
+
+data Dependency =
+  NonExistingDependency FilePath |      -- ^ non existing dependency issued by `redo-ifcreate`
+  ExistingDependency FilePath Signature -- ^ existing dependency
+  deriving (Show, Read)
+
 -- | This is the directory where dependencies are stored.
 configPath :: FilePath
 configPath = ".redo"
@@ -49,58 +75,29 @@ lockTarget (RedoTarget file) = do
 
 -- | This unlocks the target.
 unlockTarget :: RedoTarget -> IO ()
-unlockTarget (RedoTarget file) = handle
-  (\(_ :: SomeException) -> return ())
-  (removeFile $ lockPath </> encodePath file)
+unlockTarget (RedoTarget file)
+  = ignoreExceptionM_ . removeFile $ lockPath </> encodePath file
 
 -- | This clears temporary files.
 clearGarbage :: IO ()
-clearGarbage = handle
-  (\(_ :: SomeException) -> return ())
-  (removeDirectoryRecursive lockPath >>
-   removeDirectoryRecursive tempPath)
+clearGarbage = do
+  ignoreExceptionM_ $ removeDirectoryRecursive lockPath
+  ignoreExceptionM_ $ removeDirectoryRecursive tempPath
 
 -- | This returns a temp. file path for the target.
 -- This also creates directories for it.
 -- This doesn't create the temp. file.
 tempOutFilePath :: RedoTarget -> IO FilePath
-tempOutFilePath target = do
+tempOutFilePath (RedoTarget file) = do
   createDirectoryIfMissing True $ takeDirectory filePath
   return filePath
-  where filePath = tempOutPath </> encodePath (targetPath target)
-
-data RedoException =
-  NoDoFileExist FilePath |     -- ^ No .do files exist for the target.
-  DoExitFailure FilePath Int | -- ^ .do script fails with the exit code.
-  CyclicDependency FilePath |  -- ^ cyclic dependency detected for the target.
-  TargetNotGenerated FilePath
-  deriving (Show, Typeable)
-
-instance Exception RedoException
-
-data Signature =
-  NoSignature |        -- ^ for non-existing files
-  AnySignature |       -- ^ the wild-card signature which matches any signatures
-  Signature String     -- ^ the normal signature containing the MD5 value.
-  deriving (Show, Read)
-
-instance Eq Signature where
-  (Signature x) == (Signature y) = x == y
-  NoSignature == _ = False
-  _ == NoSignature = False
-  _ == _ = True
-
-data Dependency =
-  NonExistingDependency FilePath |      -- ^ non existing dependency issued by `redo-ifcreate`
-  ExistingDependency FilePath Signature -- ^ existing dependency
-  deriving (Show, Read)
+  where filePath = tempOutPath </> encodePath file
 
 -- | Return the signature of a file.
 fileSignature :: FilePath -> IO Signature
-fileSignature f = handle
+fileSignature f =
   -- any exception (e.g. file not exists.) causes NoSignature.
-  (\(_ :: SomeException) -> return NoSignature)
-  (Signature . show . MD5.md5 <$> BL.readFile f)
+  ignoreExceptionM NoSignature (Signature . show . MD5.md5 <$> BL.readFile f)
 
 -- | Add a dependency entry into a file.
 addDependency :: FilePath   -- ^ the file which a dependency will be appended to
@@ -131,28 +128,31 @@ redoTargetFromDir baseDir target =
     else RedoTarget $ makeRelative' baseDir target'
   where target' = normalise' target
 
-
 main :: IO ()
-main = (initialize >> main')
+main = (intro >> main' >> outro)
   `catch`
   \e -> case e of
-    (NoDoFileExist t) -> hPutStrLn stderr $ "no rule to make " ++ quote t
-    (DoExitFailure t err) -> hPutStrLn stderr $ t ++ " failed with exitcode " ++ show err
-    (CyclicDependency f) -> hPutStrLn stderr $ "cyclic dependency detected for " ++ f
-    (TargetNotGenerated f) -> hPutStrLn stderr $ f ++ " was not generated"
+       (NoDoFileExist t) -> die $ "no rule to make " ++ quote t
+       (DoExitFailure t err) -> die $ t ++ " failed with exitcode " ++ show err
+       (CyclicDependency f) -> die $ "cyclic dependency detected for " ++ f
+       (TargetNotGenerated f) -> die $ f ++ " was not generated"
   where
-    initialize = do
+    die err = hPutStrLn stderr err >> exitFailure
+    intro = do
       callDepth <- getCallDepth
       when (callDepth == 0) clearGarbage
+    outro = do
+      callDepth <- getCallDepth
+      when (callDepth == 0) $ hPutStrLn stderr "done"
     main' = do
       dir <- getCurrentDirectory
-      cmd <- getProgName
       -- Redo targets are created from the arguments.
       targets <- map (redoTargetFromDir dir) <$> getArgs
       -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
       -- with a file path given via an environment variable.
       -- The file is used to store the dependency information.
-      maybeDepsPath <- getDepsPath
+      maybeDepsPath <- lookupEnv "REDO_DEPS_PATH"
+      cmd <- getProgName
       case cmd of
         "redo" -> mapM_ redo targets
         "redo-ifchange" -> do
@@ -169,19 +169,17 @@ main = (initialize >> main')
             Nothing -> return ()
         _ -> hPrint stderr $ "unknown command: " ++ cmd
 
--- | This returns a file path for storing dependencies,
--- if the current process is spawned during the execution of other do scripts.
-getDepsPath :: IO (Maybe String)
-getDepsPath = lookupEnv "REDO_DEPS_PATH"
-
 -- | Redo is a recursive procedure.  This returns the call depth.
 getCallDepth :: IO Int
-getCallDepth = handle
-  (\(_ :: SomeException) -> return 0)
-  (read <$> getEnv "REDO_CALL_DEPTH")
+getCallDepth = ignoreExceptionM 0 (read <$> getEnv "REDO_CALL_DEPTH")
 
 -- | This redo the target.
 -- This returns the signature of the target.
+-- This may throw
+-- * CyclicDependency
+-- * TargetNotGenerated
+-- * NoDoFileExist
+-- * DoExitFailure
 redo :: RedoTarget
      -> IO Signature
 redo target = do
@@ -192,16 +190,12 @@ redo target = do
   lockAcquired <- lockTarget target
   unless lockAcquired . throwIO $ CyclicDependency targetFile
   unchanged <- upToDate $ ExistingDependency targetFile AnySignature
-  if unchanged
-    then hPutStrLn stderr $ targetFile ++ " is up to date."
-    -- Run a do script unless it is up to date.
-    else runDo target
-         `catch`
-         \e -> case e of
-           (NoDoFileExist t) -> hPutStrLn stderr $ "no rule to make " ++ quote t
-           (DoExitFailure t err) -> hPutStrLn stderr $ t ++ " failed with exitcode " ++ show err
-           other -> throwIO other
-  unlockTarget target
+  finally
+    (if unchanged
+     then hPutStrLn stderr $ targetFile ++ " is up to date."
+     -- Run a do script unless it is up to date.
+     else runDo target)
+    (unlockTarget target)
   sig <- fileSignature targetFile
   case sig of
     NoSignature -> throwIO $ TargetNotGenerated targetFile
@@ -232,77 +226,90 @@ upToDate (NonExistingDependency f) = not <$> doesFileExist f
 
 -- | This composes a file path to store dependencies.
 depFilePath :: RedoTarget -> FilePath
-depFilePath target = configPath </> encodePath (targetPath target)
+depFilePath (RedoTarget file) = configPath </> encodePath file
 
 -- | This returns a list of dependencies, i.e. a file path and the signature.
 getDependencies :: RedoTarget
                 -> IO (Maybe [Dependency])
-getDependencies target = handle
-  (\(_ :: SomeException) -> return Nothing)
-  (do depLines <- lines <$> readFile (depFilePath target)
-      return . Just . map read $ depLines)
+getDependencies target = ignoreExceptionM Nothing $
+  do depLines <- lines <$> readFile (depFilePath target)
+     return . Just . map read $ depLines
 
 -- | This finds an appropriate do script and runs it if it exists.
+-- This may throw
+-- * CyclicDependency
+-- * TargetNotGenerated
+-- * NoDoFileExist
+-- * DoExitFailure
 runDo :: RedoTarget -> IO ()
 runDo target = do
-  -- get absent and existing lists of applicable do files.
-  (neDoFiles, doFiles) <- spanM (fileAbsent . snd) (listDoFiles target)
-  callDepth <- getCallDepth
-  exists <- doesFileExist $ targetPath target
-  when (null doFiles && (callDepth == 0 || not exists))
-       (throwIO . NoDoFileExist $ targetPath target)
   -- Create a temporary file to store dependencies.
   tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target ++ ".deps"
+  -- Create a temporary output file.
   tmpOut <- tempOutFilePath target
-  -- Add more preferable, but absent, do files for the target as non-existing dependencies.
-  mapM_ (addDependency tmpDeps . NonExistingDependency . snd) neDoFiles
-  ec <- if null doFiles
-        -- this it the case where no appropriate do file exists,
-        -- but the target already exists.
-        then return ExitSuccess
-        else executeDo target tmpDeps tmpOut (callDepth + 1) $ head doFiles
-  case ec of
-    ExitSuccess -> do
-      -- Rename temporary files to actual names, if any exists.
-      built <- doesFileExist tmpOut
-      when built $ moveFile tmpOut (targetPath target)
-      moveFile tmpDeps $ depFilePath target
-    ExitFailure err -> do
-      -- Remove temporary files.
-      removeFile tmpOut
-      removeFile tmpDeps
-      throwIO $ DoExitFailure (targetPath target) err
- where fileAbsent f = not <$> doesFileExist f
+  callDepth <- getCallDepth
 
--- | This executes the do script.
-executeDo :: RedoTarget
-             -> FilePath           -- ^ temporary file for storing dependencies
-             -> FilePath           -- ^ temporary file for output (redo's $3 argument)
-             -> Int                -- ^ call depth
-             -> (String, FilePath) -- ^ the redo's $2 argument and the do script
-             -> IO ExitCode
-executeDo target tmpDeps tmpOut callDepth (baseName, doFile) = do
-  doFileTarget <- redoTarget doFile
-  -- Mark the do file is tracked by redo.
-  createFile $ depFilePath doFileTarget
-  -- Add the do file itself as a dependency.
-  doSig <- fileSignature doFile
-  addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
-  -- print $ cmds tmpDeps (callDepth + 1) tmpOut
-  ph <- spawnCommand cmds
-  waitForProcess ph
+  catch (handleDoFiles target tmpDeps tmpOut callDepth (listDoFiles target)) $
+    \(e :: SomeException) ->
+    do { -- Remove temporary files.
+      ignoreExceptionM_ (removeFile tmpOut);
+      ignoreExceptionM_ (removeFile tmpDeps);
+      throwIO e}
+
+  -- Rename temporary files to actual names, if any exists.
+  built <- doesFileExist tmpOut
+  when built $ moveFile tmpOut (targetPath target)
+  moveFile tmpDeps $ depFilePath target
+
+-- | This handles the list of do files.
+-- This adds do files as non-existing dependencies,
+-- until it finds and executes the first existing do file.
+-- This may throw
+-- * CyclicDependency
+-- * TargetNotGenerated
+-- * NoDoFileExist
+-- * DoExitFailure
+handleDoFiles :: RedoTarget
+              -> FilePath             -- ^ temporary file for storing dependencies
+              -> FilePath             -- ^ temporary file for output (redo's $3 argument)
+              -> Int                  -- ^ call depth
+              -> [(String, FilePath)] -- ^ the redo's $2 argument and the do script
+              -> IO ()
+handleDoFiles target tmpDeps tmpOut callDepth ((baseName, doFile):dos) = do
+  exists <- doesFileExist doFile
+  if exists
+    then do
+      -- The first do file for the target exists.
+      doFileTarget <- redoTarget doFile
+      -- Mark the do file is tracked by redo.
+      createFile $ depFilePath doFileTarget
+      -- Add the do file itself as a dependency.
+      doSig <- fileSignature doFile
+      addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
+      -- print $ cmds tmpDeps (callDepth + 1) tmpOut
+      ec <- spawnCommand cmds >>= waitForProcess
+      case ec of ExitFailure e -> throwIO $ DoExitFailure (targetPath target) e
+                 _ -> return ()
+    else do
+      -- Add the more preferable, but absent, do file as non-existing dependency.
+      addDependency tmpDeps $ NonExistingDependency doFile
+      handleDoFiles target tmpDeps tmpOut callDepth dos
  where cmds = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
-                       "REDO_CALL_DEPTH=" ++ show callDepth,
+                       "REDO_CALL_DEPTH=" ++ show (callDepth + 1),
                        "sh -e", quote doFile, quote $ targetPath target,
                        quote baseName, quote tmpOut]
+handleDoFiles (RedoTarget file) _ _ callDepth [] = do
+  -- No proper do files found.
+  exists <- doesFileExist file
+  when (callDepth == 0 || not exists) $ throwIO (NoDoFileExist file)
 
 -- | This lists all applicable do files and redo's $2 names.
 -- e.g.
 -- > listDoFiles "a.b.c"
 -- [("a.b.c","a.b.c.do"),("a","default.b.c.do"),("a.b","default.c.do"),("a.b.c","default.do")]
 listDoFiles :: RedoTarget -> [(String, FilePath)]
-listDoFiles (RedoTarget target) = (target, takeFileName target <.> "do") : defaultDos
-  where tokens = splitOn "." (takeFileName target)
+listDoFiles (RedoTarget file) = (file, takeFileName file <.> "do") : defaultDos
+  where tokens = splitOn "." (takeFileName file)
         defaultDos = map ((toBaseName *** toFileName) . (`splitAt` tokens)) [1..length tokens]
-        toBaseName xs = normalise' $ takeDirectory target </> intercalate "." xs
+        toBaseName xs = normalise' $ takeDirectory file </> intercalate "." xs
         toFileName = intercalate "." . ("default":) . (++["do"])

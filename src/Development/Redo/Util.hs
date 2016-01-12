@@ -1,5 +1,7 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 module Development.Redo.Util where
 
+import Control.Exception
 import Data.List
 import Data.List.Split
 import System.Directory
@@ -68,3 +70,9 @@ spanM p xall@(x:xs) = do
       (ys, zs) <- spanM p xs
       return (x:ys, zs)
     else return ([], xall)
+
+ignoreExceptionM :: a -> IO a -> IO a
+ignoreExceptionM r = handle (\(_ :: SomeException) -> return r)
+
+ignoreExceptionM_ :: IO () -> IO ()
+ignoreExceptionM_ = ignoreExceptionM ()
