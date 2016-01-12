@@ -29,17 +29,17 @@ makeRelative' baseDir f = dir </> takeFileName f
           | otherwise = replicate (length xall) ".." ++ yall
 
 encodePath :: FilePath -> FilePath
-encodePath ('.':xs) = " ." ++ encodePath xs
+encodePath ('.':xs) = "_." ++ encodePath xs
 encodePath (x:xs) = x : encodePath xs
 encodePath [] = []
 
 decodePath :: FilePath -> FilePath
-decodePath (' ':'.':xs) = '.' : decodePath xs
+decodePath ('_':'.':xs) = '.' : decodePath xs
 decodePath (x:xs) = x : decodePath xs
 decodePath [] = []
 
 quote :: String -> String
-quote s = '\'' : s ++ "'"
+quote s = '\"' : s ++ "\""
 
 createFile :: FilePath -> IO ()
 createFile path = do
