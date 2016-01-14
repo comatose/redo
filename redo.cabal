@@ -38,6 +38,7 @@ executable redo
                        filepath,
                        process,
                        pureMD5,
+                       simple-get-opt,
                        split
   extensions:          ScopedTypeVariables,
                        DeriveDataTypeable

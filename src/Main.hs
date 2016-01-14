@@ -14,6 +14,7 @@ import qualified Data.Digest.Pure.MD5 as MD5
 import Data.List
 import Data.List.Split
 import Data.Typeable
+import SimpleGetOpt
 import System.Directory
 import System.Environment
 import System.Exit
@@ -21,14 +22,11 @@ import System.FilePath
 import System.IO
 import System.Process
 
-data RedoException =
-  NoDoFileExist FilePath |     -- ^ No .do files exist for the target.
-  DoExitFailure FilePath Int | -- ^ .do script fails with the exit code.
-  CyclicDependency FilePath |  -- ^ cyclic dependency detected for the target.
-  TargetNotGenerated FilePath
-  deriving (Show, Typeable)
-
-instance Exception RedoException
+-- | A type for redo targets
+-- This should be constructed from 'redoTarget' or 'redoTargetFromDir'.
+newtype RedoTarget = RedoTarget {
+  targetPath :: String       -- ^ the relative path to the target
+  } deriving (Show, Read)
 
 data Signature =
   NoSignature |        -- ^ for non-existing files
@@ -46,6 +44,48 @@ data Dependency =
   NonExistingDependency FilePath |      -- ^ non existing dependency issued by `redo-ifcreate`
   ExistingDependency FilePath Signature -- ^ existing dependency
   deriving (Show, Read)
+
+data RedoException =
+  NoDoFileExist FilePath |     -- ^ No .do files exist for the target.
+  DoExitFailure FilePath Int | -- ^ .do script fails with the exit code.
+  CyclicDependency FilePath |  -- ^ cyclic dependency detected for the target.
+  TargetNotGenerated FilePath
+  deriving (Show, Typeable)
+
+instance Exception RedoException
+
+data RedoSettings = RedoSettings {
+  help :: Bool,
+  verbose :: Bool,
+  xtrace :: Bool,
+  inPar   :: Int,
+  files   :: [FilePath]
+  } deriving (Show, Read)
+
+options :: OptSpec RedoSettings
+options = OptSpec {
+  progDefaults = RedoSettings {
+      help    = False,
+      verbose = False,
+      xtrace  = False,
+      inPar   = 1,
+      files   = []
+      },
+  progOptions = [Option "h" ["help"]
+                 "Display usage."
+                 $ NoArg $ \s -> Right s { help = True }
+                ,
+                 Option "v" ["verbose"]
+                 "Display more information while working."
+                 $ NoArg $ \s -> Right s { verbose = True }
+                ,
+                 Option "x" ["xtrace"]
+                 "Display more information while working."
+                 $ NoArg $ \s -> Right s { xtrace = True }
+                ],
+  progParamDocs = [ ("FILES",   "The files that need processing.") ],
+  progParams = \p s -> Right s { files = p : files s }
+  }
 
 -- | This is the directory where dependencies are stored.
 configPath :: FilePath
@@ -105,12 +145,6 @@ addDependency :: FilePath   -- ^ the file which a dependency will be appended to
               -> IO ()
 addDependency depsFile dep = withFile depsFile AppendMode (`hPrint` dep)
 
--- | A type for redo targets
--- This should be constructed from 'redoTarget' or 'redoTargetFromDir'.
-newtype RedoTarget = RedoTarget {
-  targetPath :: String       -- ^ the relative path to the target
-  } deriving (Show, Read)
-
 -- | Create a redo target for a file.
 -- This calls 'redoTargetFromDir' with the current directory.
 redoTarget :: FilePath       -- ^ the file path
@@ -129,7 +163,7 @@ redoTargetFromDir baseDir target =
   where target' = normalise' target
 
 main :: IO ()
-main = (intro >> main' >> outro)
+main = (intro >>= main' >> outro)
   `catch`
   \e -> case e of
        (NoDoFileExist t) -> die $ "no rule to make " ++ quote t
@@ -139,15 +173,21 @@ main = (intro >> main' >> outro)
   where
     die err = hPutStrLn stderr err >> exitFailure
     intro = do
+      settings <- getOpts options;
       callDepth <- getCallDepth
-      when (callDepth == 0) clearGarbage
+      when (callDepth == 0) $ do {
+        when (help settings) (dumpUsage options >> exitSuccess);
+        setEnv "REDO_SH_OPTS" $ unwords [optsToStr settings verbose "-v",
+                                         optsToStr settings xtrace "-x"]}
+      return $ files settings
+    optsToStr settings p o = if p settings then o else ""
     outro = do
       callDepth <- getCallDepth
       when (callDepth == 0) $ hPutStrLn stderr "done"
-    main' = do
+    main' fs = do
       dir <- getCurrentDirectory
       -- Redo targets are created from the arguments.
-      targets <- map (redoTargetFromDir dir) <$> getArgs
+      let targets = map (redoTargetFromDir dir) fs
       -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
       -- with a file path given via an environment variable.
       -- The file is used to store the dependency information.
@@ -241,7 +281,8 @@ getDependencies target = ignoreExceptionM Nothing $
 -- * TargetNotGenerated
 -- * NoDoFileExist
 -- * DoExitFailure
-runDo :: RedoTarget -> IO ()
+runDo :: RedoTarget
+      -> IO ()
 runDo target = do
   -- Create a temporary file to store dependencies.
   tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target ++ ".deps"
@@ -286,18 +327,20 @@ handleDoFiles target tmpDeps tmpOut callDepth ((baseName, doFile):dos) = do
       -- Add the do file itself as a dependency.
       doSig <- fileSignature doFile
       addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
-      -- print $ cmds tmpDeps (callDepth + 1) tmpOut
-      ec <- spawnCommand cmds >>= waitForProcess
+      opts <- getEnv "REDO_SH_OPTS"
+      -- hPutStrLn stderr $ cmds opts
+      ec <- spawnCommand (cmds opts) >>= waitForProcess
       case ec of ExitFailure e -> throwIO $ DoExitFailure (targetPath target) e
                  _ -> return ()
     else do
       -- Add the more preferable, but absent, do file as non-existing dependency.
       addDependency tmpDeps $ NonExistingDependency doFile
       handleDoFiles target tmpDeps tmpOut callDepth dos
- where cmds = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
-                       "REDO_CALL_DEPTH=" ++ show (callDepth + 1),
-                       "sh -e", quote doFile, quote $ targetPath target,
-                       quote baseName, quote tmpOut]
+ where cmds opts = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
+                            "REDO_CALL_DEPTH=" ++ show (callDepth + 1),
+                            "REDO_SH_OPTS=" ++ quote opts, "sh -e", opts,
+                            quote doFile, quote $ targetPath target,
+                            quote baseName, quote tmpOut]
 handleDoFiles (RedoTarget file) _ _ callDepth [] = do
   -- No proper do files found.
   exists <- doesFileExist file
