@@ -1,0 +1,5 @@
+* DONE change the way of encoding file paths to remove path separators in them.
+  CLOSED: [2016-01-15 금 22:10]
+* TODO support executing do files which not exist in the current directory.
+* TODO support output coloring.
+* TODO support parallel build.

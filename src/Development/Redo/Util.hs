@@ -2,8 +2,10 @@
 module Development.Redo.Util where
 
 import Control.Exception
+import Data.Char
 import Data.List
 import Data.List.Split
+import Numeric
 import System.Directory
 import System.FilePath
 import System.IO
@@ -31,12 +33,18 @@ makeRelative' baseDir f = dir </> takeFileName f
           | otherwise = replicate (length xall) ".." ++ yall
 
 encodePath :: FilePath -> FilePath
-encodePath ('.':xs) = "_." ++ encodePath xs
-encodePath (x:xs) = x : encodePath xs
-encodePath [] = []
+encodePath fp = encodePathS fp ""
+  where encodePathS (x:xs)
+          | x == pathSeparator = encodeChar x . encodePathS xs
+          | x == '%'           = showString "%%" . encodePathS xs
+          | otherwise          = showChar x . encodePathS xs
+        encodePathS [] = const ""
+        encodeChar c = showChar '%' . showHex (ord c)
 
 decodePath :: FilePath -> FilePath
-decodePath ('_':'.':xs) = '.' : decodePath xs
+decodePath ('%':'%':xs) = '%' : decodePath xs
+decodePath ('%':x:y:xs) = decoded : decodePath xs
+ where decoded = chr . fst . head $ readHex (x:[y])
 decodePath (x:xs) = x : decodePath xs
 decodePath [] = []
 

@@ -128,9 +128,7 @@ clearGarbage = do
 -- This also creates directories for it.
 -- This doesn't create the temp. file.
 tempOutFilePath :: RedoTarget -> IO FilePath
-tempOutFilePath (RedoTarget file) = do
-  createDirectoryIfMissing True $ takeDirectory filePath
-  return filePath
+tempOutFilePath (RedoTarget file) = return filePath
   where filePath = tempOutPath </> encodePath file
 
 -- | Return the signature of a file.
