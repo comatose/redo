@@ -46,10 +46,11 @@ data Dependency =
   deriving (Show, Read)
 
 data RedoException =
-  NoDoFileExist FilePath |     -- ^ No .do files exist for the target.
-  DoExitFailure FilePath Int | -- ^ .do script fails with the exit code.
-  CyclicDependency FilePath |  -- ^ cyclic dependency detected for the target.
-  TargetNotGenerated FilePath
+  NoDoFileExist FilePath |      -- ^ No .do files exist for the target.
+  DoExitFailure FilePath Int |  -- ^ .do script fails with the exit code.
+  CyclicDependency FilePath |   -- ^ cyclic dependency detected for the target.
+  TargetNotGenerated FilePath | -- ^ target is not generated even after redo completes.
+  InvalidDependency FilePath    -- ^ redo dependencies are incorrectly recorded for the target.
   deriving (Show, Typeable)
 
 instance Exception RedoException
@@ -128,8 +129,9 @@ clearGarbage = do
 -- This also creates directories for it.
 -- This doesn't create the temp. file.
 tempOutFilePath :: RedoTarget -> IO FilePath
-tempOutFilePath (RedoTarget file) = return filePath
-  where filePath = tempOutPath </> encodePath file
+tempOutFilePath (RedoTarget file) = do
+  createDirectoryIfMissing True tempOutPath
+  return $ tempOutPath </> encodePath file
 
 -- | Return the signature of a file.
 fileSignature :: FilePath -> IO Signature
@@ -168,6 +170,7 @@ main = (intro >>= main' >> outro)
        (DoExitFailure t err) -> die $ t ++ " failed with exitcode " ++ show err
        (CyclicDependency f) -> die $ "cyclic dependency detected for " ++ f
        (TargetNotGenerated f) -> die $ f ++ " was not generated"
+       (InvalidDependency f) -> die $ f ++ " has invalid dependency"
   where
     die err = hPutStrLn stderr err >> exitFailure
     intro = do
@@ -252,14 +255,18 @@ upToDate (ExistingDependency f oldSig) = do
     else do
       target <- redoTarget f
       maybeDeps <- getDependencies target
-      -- print (target, maybeDeps)
       case maybeDeps of
         -- Nothing means that no dependency configuration file exist.
         -- This is handled as the target being outdated.
         Nothing -> return False
-        (Just deps) -> if null deps
-                       then return True  -- Leaf target
-                       else and <$> mapM upToDate deps
+        Just [] -> return True -- Leaf target
+        (Just deps@(ExistingDependency aDo _:_)) -> do
+          -- aDo is the do file which generated the target
+          -- exDos are do files which have a higher priority than aDo.
+          let exDos =  takeWhile (/= aDo) . map snd $ listDoFiles target
+          -- checks non-existing dependency for exDos
+          and <$> mapM upToDate (map NonExistingDependency exDos ++ deps)
+        _ -> throwIO $ InvalidDependency f
 upToDate (NonExistingDependency f) = not <$> doesFileExist f
 
 -- | This composes a file path to store dependencies.
@@ -322,7 +329,7 @@ handleDoFiles target tmpDeps tmpOut callDepth ((baseName, doFile):dos) = do
       doFileTarget <- redoTarget doFile
       -- Mark the do file is tracked by redo.
       createFile $ depFilePath doFileTarget
-      -- Add the do file itself as a dependency.
+      -- Add the do file itself as the 1st dependency.
       doSig <- fileSignature doFile
       addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
       opts <- getEnv "REDO_SH_OPTS"
@@ -330,10 +337,7 @@ handleDoFiles target tmpDeps tmpOut callDepth ((baseName, doFile):dos) = do
       ec <- spawnCommand (cmds opts) >>= waitForProcess
       case ec of ExitFailure e -> throwIO $ DoExitFailure (targetPath target) e
                  _ -> return ()
-    else do
-      -- Add the more preferable, but absent, do file as non-existing dependency.
-      addDependency tmpDeps $ NonExistingDependency doFile
-      handleDoFiles target tmpDeps tmpOut callDepth dos
+    else handleDoFiles target tmpDeps tmpOut callDepth dos
  where cmds opts = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
                             "REDO_CALL_DEPTH=" ++ show (callDepth + 1),
                             "REDO_SH_OPTS=" ++ quote opts, "sh -e", opts,
