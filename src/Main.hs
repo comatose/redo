@@ -295,12 +295,16 @@ runDo target = do
   tmpOut <- tempOutFilePath target
   callDepth <- getCallDepth
 
-  catch (handleDoFiles target tmpDeps tmpOut callDepth (listDoFiles target)) $
-    \(e :: SomeException) ->
-    do { -- Remove temporary files.
-      ignoreExceptionM_ (removeFile tmpOut);
-      ignoreExceptionM_ (removeFile tmpDeps);
-      throwIO e}
+  exists <- doesFileExist $ targetPath target
+  doFiles <- filterM (doesFileExist . snd) (listDoFiles target)
+  case doFiles of
+    [] -> when (callDepth == 0 || not exists) $
+      throwIO . NoDoFileExist $ targetPath target
+    (doFile:_) -> catch (executeDo target tmpDeps tmpOut callDepth doFile) $
+      \(e :: SomeException) -> do
+        ignoreExceptionM_ (removeFile tmpOut)
+        ignoreExceptionM_ (removeFile tmpDeps)
+        throwIO e
 
   -- Rename temporary files to actual names, if any exists.
   built <- doesFileExist tmpOut
@@ -315,38 +319,29 @@ runDo target = do
 -- * TargetNotGenerated
 -- * NoDoFileExist
 -- * DoExitFailure
-handleDoFiles :: RedoTarget
-              -> FilePath             -- ^ temporary file for storing dependencies
-              -> FilePath             -- ^ temporary file for output (redo's $3 argument)
-              -> Int                  -- ^ call depth
-              -> [(String, FilePath)] -- ^ the redo's $2 argument and the do script
-              -> IO ()
-handleDoFiles target tmpDeps tmpOut callDepth ((baseName, doFile):dos) = do
-  exists <- doesFileExist doFile
-  if exists
-    then do
-      -- The first do file for the target exists.
-      doFileTarget <- redoTarget doFile
-      -- Mark the do file is tracked by redo.
-      createFile $ depFilePath doFileTarget
-      -- Add the do file itself as the 1st dependency.
-      doSig <- fileSignature doFile
-      addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
-      opts <- getEnv "REDO_SH_OPTS"
-      -- hPutStrLn stderr $ cmds opts
-      ec <- spawnCommand (cmds opts) >>= waitForProcess
-      case ec of ExitFailure e -> throwIO $ DoExitFailure (targetPath target) e
-                 _ -> return ()
-    else handleDoFiles target tmpDeps tmpOut callDepth dos
+executeDo :: RedoTarget
+          -> FilePath             -- ^ temporary file for storing dependencies
+          -> FilePath             -- ^ temporary file for output (redo's $3 argument)
+          -> Int                  -- ^ call depth
+          -> (String, FilePath)   -- ^ the redo's $2 argument and the do script
+          -> IO ()
+executeDo target tmpDeps tmpOut callDepth (baseName, doFile) = do
+  doFileTarget <- redoTarget doFile
+  -- Mark the do file is tracked by redo.
+  createFile $ depFilePath doFileTarget
+  -- Add the do file itself as the 1st dependency.
+  doSig <- fileSignature doFile
+  addDependency tmpDeps $ ExistingDependency (targetPath doFileTarget) doSig
+  opts <- getEnv "REDO_SH_OPTS"
+  -- hPutStrLn stderr $ cmds opts
+  ec <- spawnCommand (cmds opts) >>= waitForProcess
+  case ec of ExitFailure e -> throwIO $ DoExitFailure (targetPath target) e
+             _ -> return ()
  where cmds opts = unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
                             "REDO_CALL_DEPTH=" ++ show (callDepth + 1),
                             "REDO_SH_OPTS=" ++ quote opts, "sh -e", opts,
                             quote doFile, quote $ targetPath target,
                             quote baseName, quote tmpOut]
-handleDoFiles (RedoTarget file) _ _ callDepth [] = do
-  -- No proper do files found.
-  exists <- doesFileExist file
-  when (callDepth == 0 || not exists) $ throwIO (NoDoFileExist file)
 
 -- | This lists all applicable do files and redo's $2 names.
 -- e.g.
