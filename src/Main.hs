@@ -15,6 +15,7 @@ import Data.List
 import Data.List.Split
 import Data.Typeable
 import SimpleGetOpt
+import System.Console.ANSI
 import System.Directory
 import System.Environment
 import System.Exit
@@ -50,7 +51,8 @@ data RedoException =
   DoExitFailure FilePath Int |  -- ^ .do script fails with the exit code.
   CyclicDependency FilePath |   -- ^ cyclic dependency detected for the target.
   TargetNotGenerated FilePath | -- ^ target is not generated even after redo completes.
-  InvalidDependency FilePath    -- ^ redo dependencies are incorrectly recorded for the target.
+  InvalidDependency FilePath |  -- ^ redo dependencies are incorrectly recorded for the target.
+  UnknownRedoCommand String
   deriving (Show, Typeable)
 
 instance Exception RedoException
@@ -88,6 +90,24 @@ options = OptSpec {
   progParams = \p s -> Right s { files = files s ++ [p] }
   }
 
+printInfo :: String -> IO ()
+printInfo s = do
+  hSetSGR stderr [SetColor Foreground Vivid Blue]
+  hPutStrLn stderr s
+  hSetSGR stderr [Reset]
+
+printSuccess :: String -> IO ()
+printSuccess s = do
+  hSetSGR stderr [SetColor Foreground Vivid Green]
+  hPutStrLn stderr s
+  hSetSGR stderr [Reset]
+
+printError :: String -> IO ()
+printError s = do
+  hSetSGR stderr [SetColor Foreground Vivid Red]
+  hPutStrLn stderr s
+  hSetSGR stderr [Reset]
+
 -- | This is the directory where dependencies are stored.
 configPath :: FilePath
 configPath = ".redo"
@@ -118,12 +138,6 @@ lockTarget (RedoTarget file) = do
 unlockTarget :: RedoTarget -> IO ()
 unlockTarget (RedoTarget file)
   = ignoreExceptionM_ . removeFile $ lockPath </> encodePath file
-
--- | This clears temporary files.
-clearGarbage :: IO ()
-clearGarbage = do
-  ignoreExceptionM_ $ removeDirectoryRecursive lockPath
-  ignoreExceptionM_ $ removeDirectoryRecursive tempPath
 
 -- | This returns a temp. file path for the target.
 -- This also creates directories for it.
@@ -163,7 +177,7 @@ redoTargetFromDir baseDir target =
   where target' = normalise' target
 
 main :: IO ()
-main = (intro >>= main' >> outro)
+main = (intro >>= main')
   `catch`
   \e -> case e of
        (NoDoFileExist t) -> die $ "no rule to make " ++ quote t
@@ -171,8 +185,9 @@ main = (intro >>= main' >> outro)
        (CyclicDependency f) -> die $ "cyclic dependency detected for " ++ f
        (TargetNotGenerated f) -> die $ f ++ " was not generated"
        (InvalidDependency f) -> die $ f ++ " has invalid dependency"
+       (UnknownRedoCommand cmd) -> die $ "unknown command: " ++ cmd
   where
-    die err = hPutStrLn stderr err >> exitFailure
+    die err = printError err >> exitFailure
     intro = do
       settings <- getOpts options;
       callDepth <- getCallDepth
@@ -182,9 +197,6 @@ main = (intro >>= main' >> outro)
                                          optsToStr settings xtrace "-x"]}
       return $ files settings
     optsToStr settings p o = if p settings then o else ""
-    outro = do
-      callDepth <- getCallDepth
-      when (callDepth == 0) $ hPutStrLn stderr "done"
     main' fs = do
       dir <- getCurrentDirectory
       -- Redo targets are created from the arguments.
@@ -208,7 +220,9 @@ main = (intro >>= main' >> outro)
           case maybeDepsPath of
             (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency . targetPath) targets
             Nothing -> return ()
-        _ -> hPrint stderr $ "unknown command: " ++ cmd
+        _ -> throwIO $ UnknownRedoCommand cmd
+      callDepth <- getCallDepth
+      when (callDepth == 0) $ printSuccess "done"
 
 -- | Redo is a recursive procedure.  This returns the call depth.
 getCallDepth :: IO Int
@@ -226,14 +240,14 @@ redo :: RedoTarget
 redo target = do
   callDepth <- getCallDepth
   let indent = replicate callDepth ' '
-  hPutStrLn stderr $ indent ++ "redo  " ++ targetFile
+  printInfo $ "redo " ++ indent ++targetFile
   -- Try to lock the target, if False returns, it means that cyclic dependency exists.
   lockAcquired <- lockTarget target
   unless lockAcquired . throwIO $ CyclicDependency targetFile
   unchanged <- upToDate $ ExistingDependency targetFile AnySignature
   finally
     (if unchanged
-     then hPutStrLn stderr $ targetFile ++ " is up to date."
+     then printInfo $ targetFile ++ " is up to date."
      -- Run a do script unless it is up to date.
      else runDo target)
     (unlockTarget target)
