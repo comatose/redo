@@ -85,7 +85,7 @@ options = OptSpec {
                  $ NoArg $ \s -> Right s { xtrace = True }
                 ],
   progParamDocs = [ ("FILES",   "The files that need processing.") ],
-  progParams = \p s -> Right s { files = p : files s }
+  progParams = \p s -> Right s { files = files s ++ [p] }
   }
 
 -- | This is the directory where dependencies are stored.
