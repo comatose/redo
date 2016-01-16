@@ -2,6 +2,7 @@
 module Development.Redo.Util where
 
 import Control.Exception
+import Control.Monad
 import Data.Char
 import Data.List
 import Data.List.Split
@@ -66,8 +67,10 @@ createTempFile path name = do
 
 moveFile :: FilePath -> FilePath -> IO ()
 moveFile src trg = do
-  createDirectoryIfMissing True $ takeDirectory trg
-  renameFile src trg
+  exist <- doesFileExist src
+  when exist $ do
+    createDirectoryIfMissing True $ takeDirectory trg
+    renameFile src trg
 
 spanM :: Monad m => (a -> m Bool) -> [a] -> m ([a], [a])
 spanM _ [] = return ([], [])
