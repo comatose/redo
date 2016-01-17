@@ -25,9 +25,10 @@ import System.Process
 
 -- | A type for redo targets
 -- This should be constructed from 'redoTarget' or 'redoTargetFromDir'.
-newtype RedoTarget = RedoTarget {
-  targetPath :: String       -- ^ the relative path to the target
-  } deriving (Show, Read)
+type RedoTarget = FilePath
+-- newtype RedoTarget = RedoTarget {
+--   targetPath :: String       -- ^ the relative path to the target
+--   } deriving (Show, Read)
 
 data Signature =
   NoSignature |        -- ^ for non-existing files
@@ -126,25 +127,25 @@ tempOutPath = tempPath </> "out"
 -- | This locks the target.
 -- If already locked, this returns False.
 lockTarget :: RedoTarget -> IO Bool
-lockTarget (RedoTarget file) = do
+lockTarget target = do
   locked <- doesFileExist lockFile
   if locked
     then return False
     else createFile lockFile >> return True
-  where lockFile = lockPath </> encodePath file
+  where lockFile = lockPath </> encodePath target
 
 -- | This unlocks the target.
 unlockTarget :: RedoTarget -> IO ()
-unlockTarget (RedoTarget file)
-  = ignoreExceptionM_ . removeFile $ lockPath </> encodePath file
+unlockTarget target
+  = ignoreExceptionM_ . removeFile $ lockPath </> encodePath target
 
 -- | This returns a temp. file path for the target.
 -- This also creates directories for it.
 -- This doesn't create the temp. file.
 tempOutFilePath :: RedoTarget -> IO FilePath
-tempOutFilePath (RedoTarget file) = do
+tempOutFilePath target = do
   createDirectoryIfMissing True tempOutPath
-  return $ tempOutPath </> encodePath file
+  return $ tempOutPath </> encodePath target
 
 -- | Return the signature of a file.
 fileSignature :: FilePath -> IO Signature
@@ -171,8 +172,8 @@ redoTargetFromDir :: FilePath    -- ^ the base directory, this should be an abso
                   -> RedoTarget
 redoTargetFromDir baseDir target =
   if isRelative $ takeDirectory target'
-    then RedoTarget target'
-    else RedoTarget $ makeRelative' baseDir target'
+    then target'
+    else makeRelative' baseDir target'
   where target' = normalise' target
 
 main :: IO ()
@@ -212,12 +213,12 @@ main = (intro >>= main')
           sigs <- mapM redo targets
           case maybeDepsPath of
             (Just depsPath) -> do
-              let deps = zipWith (\t s -> ExistingDependency (targetPath t) s) targets sigs
+              let deps = zipWith ExistingDependency targets sigs
               mapM_ (addDependency depsPath) deps
             Nothing -> return ()
         "redo-ifcreate" ->
           case maybeDepsPath of
-            (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency . targetPath) targets
+            (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency) targets
             Nothing -> return ()
         _ -> throwIO $ UnknownRedoCommand cmd
       callDepth <- getCallDepth
@@ -256,7 +257,7 @@ redo target = do
   case sig of
     NoSignature -> throwIO $ TargetNotGenerated targetFile
     _ -> return sig
-  where targetFile = targetPath target
+  where targetFile = target
 
 -- | This recursively visits its dependencies to test whether it is up to date.
 upToDate :: Dependency
@@ -286,7 +287,7 @@ upToDate (NonExistingDependency f) = not <$> doesFileExist f
 
 -- | This composes a file path to store dependencies.
 depFilePath :: RedoTarget -> FilePath
-depFilePath (RedoTarget file) = configPath </> encodePath file
+depFilePath target = configPath </> encodePath target
 
 -- | This returns a list of dependencies, i.e. a file path and the signature.
 getDependencies :: RedoTarget
@@ -307,10 +308,10 @@ runDo :: RedoTarget
       -> IO ()
 runDo target = do
   doFiles <- filterM (doesFileExist . snd) (listDoFiles target)
-  when (null doFiles) $ throwIO . NoDoFileExist $ targetPath target
+  when (null doFiles) $ throwIO . NoDoFileExist $ target
 
   -- Create a temporary file to store dependencies.
-  tmpDeps <- createTempFile tempPath . takeFileName $ targetPath target
+  tmpDeps <- createTempFile tempPath . takeFileName $ target
   -- Create a temporary output file.
   tmpOut <- tempOutFilePath target
 
@@ -322,7 +323,7 @@ runDo target = do
       throwIO e
 
   -- Rename temporary files to actual names.
-  ignoreExceptionM_ $ moveFile tmpOut (targetPath target)
+  ignoreExceptionM_ $ moveFile tmpOut target
   ignoreExceptionM_ $ moveFile tmpDeps (depFilePath target)
 
 -- | This executes the do file.
@@ -345,13 +346,13 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
   addDependency tmpDeps $ ExistingDependency doFile doSig
   opts <- getEnv "REDO_SH_OPTS"
   ec <- spawnCommand (cmds callDepth opts) >>= waitForProcess
-  case ec of ExitFailure e -> throwIO $ DoExitFailure (targetPath target) e
+  case ec of ExitFailure e -> throwIO $ DoExitFailure target e
              _ -> return ()
  where cmds callDepth opts =
          unwords ["REDO_DEPS_PATH=" ++ quote tmpDeps,
                   "REDO_CALL_DEPTH=" ++ show (callDepth + 1),
                   "REDO_SH_OPTS=" ++ quote opts, "sh -e", opts,
-                  quote doFile, quote $ targetPath target,
+                  quote doFile, quote target,
                   quote baseName, quote tmpOut]
 
 -- | This lists all applicable do files and redo's $2 names.
@@ -359,8 +360,8 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
 -- > listDoFiles "a.b.c"
 -- [("a.b.c","a.b.c.do"),("a","default.b.c.do"),("a.b","default.c.do"),("a.b.c","default.do")]
 listDoFiles :: RedoTarget -> [(String, FilePath)]
-listDoFiles (RedoTarget file) = (file, takeFileName file <.> "do") : defaultDos
-  where tokens = splitOn "." (takeFileName file)
+listDoFiles target = (target, takeFileName target <.> "do") : defaultDos
+  where tokens = splitOn "." (takeFileName target)
         defaultDos = map ((toBaseName *** toFileName) . (`splitAt` tokens)) [1..length tokens]
-        toBaseName xs = normalise' $ takeDirectory file </> intercalate "." xs
+        toBaseName xs = normalise' $ takeDirectory target </> intercalate "." xs
         toFileName = intercalate "." . ("default":) . (++["do"])
