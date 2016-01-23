@@ -138,8 +138,7 @@ redo target = do
      -- Run a do script unless it is up to date.
      else runDo target)
     (unlockTarget target)
-  maybeDepsPath <- lookupEnv C.envDependencyPath
-  case maybeDepsPath of
+  case C.callerDepsPath of
     Nothing -> return ()
     (Just depsPath) -> do
       sig <- fileSignature target

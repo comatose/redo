@@ -30,9 +30,6 @@ lockDirPath = configPath </> "lock"
 tempOutDirPath :: FilePath
 tempOutDirPath = tempDirPath </> "out"
 
-printLockPath :: FilePath
-printLockPath = configPath </> ".print_lock"
-
 envCallDepth :: String
 envCallDepth = "REDO_CALL_DEPTH"
 
@@ -62,9 +59,6 @@ sessionID = unsafePerformIO $ do
   case maybeSID of
     Nothing -> show <$> getProcessID
     (Just sid) -> return sid
-
-setSessionID :: IO ()
-setSessionID = setEnv envSessionID sessionID
 
 createGlobalLock :: IO ()
 createGlobalLock = do
@@ -99,3 +93,22 @@ printError = printWithColor [SetColor Foreground Vivid Red]
 
 printDebug :: String -> IO ()
 printDebug = printWithColor [SetColor Foreground Vivid Yellow]
+
+data RedoSettings = RedoSettings {
+  help :: Bool,
+  verbose :: Bool,
+  xtrace :: Bool,
+  inPar   :: Int,
+  files   :: [FilePath]
+  } deriving (Show, Read)
+
+configSession :: RedoSettings -> IO ()
+configSession settings = do
+  setEnv envSessionID sessionID
+  setEnv envShellOptions $ unwords [optsToStr verbose "-v",
+                                    optsToStr xtrace "-x"];
+ where optsToStr p o = if p settings then o else ""
+
+callerDepsPath :: Maybe FilePath
+{-# NOINLINE callerDepsPath #-}
+callerDepsPath = unsafePerformIO $ lookupEnv envDependencyPath

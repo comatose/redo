@@ -12,14 +12,6 @@ import System.Environment
 import System.Exit
 import Text.Read
 
-data RedoSettings = RedoSettings {
-  help :: Bool,
-  verbose :: Bool,
-  xtrace :: Bool,
-  inPar   :: Int,
-  files   :: [FilePath]
-  } deriving (Show, Read)
-
 options :: OptSpec RedoSettings
 options = OptSpec {
   progDefaults = RedoSettings {
@@ -59,41 +51,43 @@ main = do
   finalize
   where
     main' targets = do
-      -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
-      -- with a file path given via an environment variable.
-      -- The file is used to store the dependency information.
-      maybeDepsPath <- lookupEnv envDependencyPath
       cmd <- getProgName
       case cmd of
         "redo" -> parRedo targets
         "redo-ifchange" -> parRedo targets
         "redo-ifcreate" ->
-          case maybeDepsPath of
+          -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
+          -- with a file path given via an environment variable.
+          -- The file is used to store the dependency information.
+          case callerDepsPath of
             (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency) targets
             Nothing -> return ()
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"
     parRedo [] = return ()
     parRedo (t:ts) = do
+      -- targets except the 1st one are handles by child threads.
+      -- each thread requires a processor token to redo.
       mapM_ (forkChild . withProcessorToken . redo) ts
+      -- 1st target is handled by the main thread,
+      -- which already has a processor token from the beginning of the execution.
       redo t
+      -- release the acquired token and wait for children to end.
+      -- after their completion, reacquire a processor token.
       withoutProcessorToken waitForChildren
 
 initialize :: IO [RedoTarget]
 initialize = do
   settings <- getOpts options
+  when (help settings) (dumpUsage options >> exitSuccess);
   when (callDepth == 0) $ do {
-    setSessionID;
+    configSession settings;
     createGlobalLock;
-    when (help settings) (dumpUsage options >> exitSuccess);
-    setEnv envShellOptions $ unwords [optsToStr settings verbose "-v",
-                                     optsToStr settings xtrace "-x"];
     createProcessorTokens (inPar settings - 1);
     }
   dir <- getCurrentDirectory
   -- Redo targets are created from the arguments.
   return $ map (redoTargetFromDir dir) (files settings)
- where optsToStr settings p o = if p settings then o else ""
 
 finalize :: IO ()
 finalize =  when (callDepth == 0) $ do {
