@@ -15,7 +15,6 @@ import qualified Data.Digest.Pure.MD5 as MD5
 import Data.List
 import Data.List.Split
 import Data.Typeable
-import System.Console.ANSI
 import System.Directory
 import System.Environment
 import System.Exit
@@ -57,24 +56,6 @@ data RedoException =
   deriving (Show, Typeable)
 
 instance Exception RedoException
-
-printInfo :: String -> IO ()
-printInfo s = do
-  hSetSGR stderr [SetColor Foreground Vivid Blue]
-  hPutStrLn stderr s
-  hSetSGR stderr [Reset]
-
-printSuccess :: String -> IO ()
-printSuccess s = do
-  hSetSGR stderr [SetColor Foreground Vivid Green]
-  hPutStrLn stderr s
-  hSetSGR stderr [Reset]
-
-printError :: String -> IO ()
-printError s = do
-  hSetSGR stderr [SetColor Foreground Vivid Red]
-  hPutStrLn stderr s
-  hSetSGR stderr [Reset]
 
 -- | This locks the target.
 -- If already locked, this returns False.
@@ -146,22 +127,21 @@ redo :: RedoTarget
 redo target = do
   callDepth <- getCallDepth
   let indent = replicate callDepth ' '
-  printInfo $ "redo " ++ indent ++targetFile
+  printInfo $ "redo " ++ indent ++ target
   -- Try to lock the target, if False returns, it means that cyclic dependency exists.
   lockAcquired <- lockTarget target
-  unless lockAcquired . throwIO $ CyclicDependency targetFile
-  unchanged <- upToDate $ ExistingDependency targetFile AnySignature
+  unless lockAcquired . throwIO $ CyclicDependency target
+  unchanged <- upToDate $ ExistingDependency target AnySignature
   finally
     (if unchanged
-     then printInfo $ targetFile ++ " is up to date."
+     then printInfo $ target ++ " is up to date."
      -- Run a do script unless it is up to date.
      else runDo target)
     (unlockTarget target)
-  sig <- fileSignature targetFile
+  sig <- fileSignature target
   case sig of
-    NoSignature -> throwIO $ TargetNotGenerated targetFile
+    NoSignature -> throwIO $ TargetNotGenerated target
     _ -> return sig
-  where targetFile = target
 
 -- | This recursively visits its dependencies to test whether it is up to date.
 upToDate :: Dependency

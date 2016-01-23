@@ -1,6 +1,8 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Development.Redo.Util where
 
+import Development.Redo.Config
+
 import Control.Exception
 import Control.Monad
 import Data.Char
@@ -8,6 +10,7 @@ import Data.List
 import Data.List.Split
 import Numeric
 import System.Directory
+import System.Environment
 import System.FilePath
 import System.IO
 import System.Posix.Process
@@ -91,18 +94,36 @@ ignoreExceptionM r = handle (\(_ :: SomeException) -> return r)
 ignoreExceptionM_ :: IO () -> IO ()
 ignoreExceptionM_ = ignoreExceptionM ()
 
-createTokens :: Int -> IO (Semaphore, String)
-createTokens n = do
+createProcessorTokens :: Int -> IO ()
+createProcessorTokens n = do
   pid <- getProcessID
-  let sid = "/redo_sem_" ++ show pid
-  s <- semOpen sid (OpenSemFlags True False) (CMode 448) n
-  return (s, sid)
+  let sid = semaphorePrefix ++ show pid
+  _ <- semOpen sid (OpenSemFlags True True) (CMode 448) n
+  printDebug $ "Semaphore '" ++ sid ++ "' with " ++ show n ++ " sems created."
+  setEnv envSemaphoreID sid
 
-acquireToken :: String -> IO Semaphore
-acquireToken sid = do
-  s <- semOpen sid (OpenSemFlags True False) (CMode 448) 0
-  semWait s
-  return s
+destroyProcessorTokens :: IO ()
+destroyProcessorTokens = do
+  sid <- getEnv envSemaphoreID
+  sem <- semOpen sid (OpenSemFlags False False) (CMode 448) 0
+  n <- semGetValue sem
+  printDebug $ "Semaphore '" ++ sid ++ "' with " ++ show n ++ " sems destroyed."
+  semUnlink sid
 
-releaseToken :: Semaphore -> IO ()
-releaseToken s = semPost s
+getSemaphoreID :: IO Semaphore
+getSemaphoreID = do
+  sid <- getEnv envSemaphoreID
+  semOpen sid (OpenSemFlags True False) (CMode 448) 0
+
+withProcessorToken :: Semaphore -> IO a -> IO a
+withProcessorToken sem = bracket_ (semThreadWait sem >> printProcessorTokens sem)
+  (semPost sem >> printProcessorTokens sem)
+
+withoutProcessorToken :: Semaphore -> IO a -> IO a
+withoutProcessorToken sem = bracket_ (semPost sem >> printProcessorTokens sem)
+  (semThreadWait sem >> printProcessorTokens sem)
+
+printProcessorTokens :: Semaphore -> IO ()
+printProcessorTokens sem = do
+  n <- semGetValue sem
+  printDebug $ "Semaphores = " ++ show n
