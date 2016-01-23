@@ -17,3 +17,12 @@ lockPath = configPath </> "lock"
 -- | This is the directory where temporary output files are created.
 tempOutPath :: FilePath
 tempOutPath = tempPath </> "out"
+
+envCallDepth :: String
+envCallDepth = "REDO_CALL_DEPTH"
+
+envShellOptions :: String
+envShellOptions = "REDO_SH_OPTS"
+
+envDependencyPath :: String
+envDependencyPath = "REDO_DEPS_PATH"

@@ -20,13 +20,19 @@ source-repository    head
 
 library
   hs-source-dirs:      src
-  build-depends:       base >= 4 && < 5,
+  build-depends:       ansi-terminal,
+                       base >= 4 && < 5,
+                       bytestring,
                        directory,
                        filepath,
+                       process,
+                       pureMD5,
                        split,
                        unix
-  extensions:          ScopedTypeVariables
+  extensions:          ScopedTypeVariables,
+                       DeriveDataTypeable
   exposed-modules:
+                       Development.Redo
                        Development.Redo.Config
                        Development.Redo.Util
 
@@ -44,6 +50,4 @@ executable redo
                        simple-get-opt,
                        split,
                        unix
-  extensions:          ScopedTypeVariables,
-                       DeriveDataTypeable
   ghc-options:         -Wall -fno-warn-missing-signatures
