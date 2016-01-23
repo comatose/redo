@@ -136,6 +136,8 @@ callDepth :: Int
 callDepth = unsafePerformIO $ ignoreExceptionM 0 (read <$> getEnv C.envCallDepth)
 
 -- | This redo the target.
+-- This requires a target lock and a processor token to run.
+-- The order of acquisition is important to prevent deadlock.
 -- This returns the signature of the target.
 -- This may throw
 -- * CyclicDependency
@@ -146,7 +148,7 @@ callDepth = unsafePerformIO $ ignoreExceptionM 0 (read <$> getEnv C.envCallDepth
 -- * UnknownRedoCommand
 redo :: RedoTarget
      -> IO ()
-redo target = do
+redo target = withTargetLock target . withProcessorToken $ do
   let indent = replicate callDepth ' '
   C.printInfo $ "redo " ++ indent ++ target
   -- Try to lock the target, if False returns, it means that cyclic dependency exists.

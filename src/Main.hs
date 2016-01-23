@@ -70,15 +70,15 @@ main = do
       when (callDepth == 0) $ printSuccess "done"
     parRedo [] = return ()
     parRedo (t:ts) = do
-      -- targets except the 1st one are handles by child threads.
-      -- each thread requires a processor token to redo.
-      mapM_ (forkChild . withProcessorToken . redo) ts
+      -- targets except the 1st one are handled by child threads.
+      -- redo first acquires a target lock and then a processor token.
+      mapM_ (forkChild . redo) ts
       -- 1st target is handled by the main thread,
       -- which already has a processor token from the beginning of the execution.
-      redo t
-      -- release the acquired token and wait for children to end.
-      -- after their completion, reacquire a processor token.
-      withoutProcessorToken waitForChildren
+      -- thus, release the token before redo.
+      withoutProcessorToken $ do
+        redo t
+        waitForChildren
 
 initialize :: IO [RedoTarget]
 initialize = do
