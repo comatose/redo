@@ -230,6 +230,7 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
   -- Add the do file itself as the 1st dependency.
   doSig <- fileSignature doFile
   addDependency tmpDeps $ ExistingDependency doFile doSig
+  C.printDebug cmds
   ec <- spawnCommand cmds >>= waitForProcess
   case ec of ExitFailure e -> throwIO $ DoExitFailure target e
              _ -> return ()
@@ -238,6 +239,7 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
                   C.envCallDepth ++ "=" ++ show (callDepth + 1),
                   C.envShellOptions ++ "=" ++ quote C.shellOptions,
                   C.envSessionID ++ "=" ++ quote C.sessionID,
+                  C.envDebugMode ++ "=" ++ show C.debugMode,
                   "sh -e", C.shellOptions,
                   quote doFile, quote target,
                   quote baseName, quote tmpOut]

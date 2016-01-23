@@ -2,6 +2,7 @@ module Development.Redo.Config where
 
 import Control.Applicative
 import Control.Exception
+import Control.Monad
 import System.Console.ANSI
 import System.Environment
 import System.FilePath
@@ -11,20 +12,20 @@ import System.Posix.Process
 import System.Posix.Semaphore
 import System.Posix.Types
 
-configPath :: FilePath
-configPath = ".redo"
+configDirPath :: FilePath
+configDirPath = ".redo"
 
 -- | This is the directory where dependencies are stored.
 depsDirPath :: FilePath
-depsDirPath = configPath </> "deps"
+depsDirPath = configDirPath </> "deps"
 
 -- | This is the directory where temporary files are created.
 tempDirPath :: FilePath
-tempDirPath = configPath </> "tmp"
+tempDirPath = configDirPath </> "tmp"
 
 -- | This is the directory where lock files are created.
 lockDirPath :: FilePath
-lockDirPath = configPath </> "lock"
+lockDirPath = configDirPath </> "lock"
 
 -- | This is the directory where temporary output files are created.
 tempOutDirPath :: FilePath
@@ -41,6 +42,9 @@ envDependencyPath = "REDO_DEPS_PATH"
 
 envSessionID :: String
 envSessionID = "REDO_SESSION_ID"
+
+envDebugMode :: String
+envDebugMode = "REDO_DEBUG_MODE"
 
 semaphorePrefix :: String
 semaphorePrefix = "/redo_sem_"
@@ -92,14 +96,15 @@ printError :: String -> IO ()
 printError = printWithColor [SetColor Foreground Vivid Red]
 
 printDebug :: String -> IO ()
-printDebug = printWithColor [SetColor Foreground Vivid Yellow]
+printDebug s = when debugMode $ printWithColor [SetColor Foreground Vivid Yellow] s
 
 data RedoSettings = RedoSettings {
   help :: Bool,
   verbose :: Bool,
   xtrace :: Bool,
-  inPar   :: Int,
-  files   :: [FilePath]
+  inPar :: Int,
+  files :: [FilePath],
+  debug :: Bool
   } deriving (Show, Read)
 
 configSession :: RedoSettings -> IO ()
@@ -107,8 +112,13 @@ configSession settings = do
   setEnv envSessionID sessionID
   setEnv envShellOptions $ unwords [optsToStr verbose "-v",
                                     optsToStr xtrace "-x"];
+  setEnv envDebugMode . show $ debug settings
  where optsToStr p o = if p settings then o else ""
 
 callerDepsPath :: Maybe FilePath
 {-# NOINLINE callerDepsPath #-}
 callerDepsPath = unsafePerformIO $ lookupEnv envDependencyPath
+
+debugMode :: Bool
+{-# NOINLINE debugMode #-}
+debugMode = read . unsafePerformIO $ getEnv envDebugMode

@@ -15,11 +15,12 @@ import Text.Read
 options :: OptSpec RedoSettings
 options = OptSpec {
   progDefaults = RedoSettings {
-      help    = False,
+      help = False,
       verbose = False,
-      xtrace  = False,
-      inPar   = 1,
-      files   = []
+      xtrace = False,
+      inPar = 1,
+      files = [],
+      debug = False
       },
   progOptions = [Option "h" ["help"] "Display usage."
                  $ NoArg $ \s -> Right s { help = True },
@@ -33,7 +34,10 @@ options = OptSpec {
                  Option "p" ["par"] "The number of parallelism."
                  $ ReqArg "NUM" $ \a s -> case readMaybe a of
                     Just n | n > 0  -> Right s { inPar = n }
-                    _               -> Left "Invalid value for `par`"],
+                    _               -> Left "Invalid value for `par`",
+
+                 Option "D" ["debug"] "Display debug information."
+                 $ NoArg $ \s -> Right s { debug = True }],
 
   progParamDocs = [ ("FILES",   "The files that need processing.") ],
   progParams = \p s -> Right s { files = files s ++ [p] }}
