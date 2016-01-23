@@ -23,9 +23,11 @@ library
   build-depends:       base >= 4 && < 5,
                        directory,
                        filepath,
-                       split
+                       split,
+                       unix
   extensions:          ScopedTypeVariables
   exposed-modules:
+                       Development.Redo.Config
                        Development.Redo.Util
 
 executable redo
@@ -40,7 +42,8 @@ executable redo
                        process,
                        pureMD5,
                        simple-get-opt,
-                       split
+                       split,
+                       unix
   extensions:          ScopedTypeVariables,
                        DeriveDataTypeable
   ghc-options:         -Wall -fno-warn-missing-signatures
