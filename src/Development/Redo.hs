@@ -3,7 +3,7 @@
 
 module Development.Redo where
 
-import Development.Redo.Config
+import qualified Development.Redo.Config as C
 import Development.Redo.Util
 
 import Control.Applicative
@@ -65,20 +65,20 @@ lockTarget target = do
   if locked
     then return False
     else createFile lockFile >> return True
-  where lockFile = lockPath </> encodePath target
+  where lockFile = C.lockDirPath </> encodePath target
 
 -- | This unlocks the target.
 unlockTarget :: RedoTarget -> IO ()
 unlockTarget target
-  = ignoreExceptionM_ . removeFile $ lockPath </> encodePath target
+  = ignoreExceptionM_ . removeFile $ C.lockDirPath </> encodePath target
 
 -- | This returns a temp. file path for the target.
 -- This also creates directories for it.
 -- This doesn't create the temp. file.
 tempOutFilePath :: RedoTarget -> IO FilePath
 tempOutFilePath target = do
-  createDirectoryIfMissing True tempOutPath
-  return $ tempOutPath </> encodePath target
+  createDirectoryIfMissing True C.tempOutDirPath
+  return $ C.tempOutDirPath </> encodePath target
 
 -- | Return the signature of a file.
 fileSignature :: FilePath -> IO Signature
@@ -111,7 +111,7 @@ redoTargetFromDir baseDir target =
 
 -- | Redo is a recursive procedure.  This returns the call depth.
 getCallDepth :: IO Int
-getCallDepth = ignoreExceptionM 0 (read <$> getEnv envCallDepth)
+getCallDepth = ignoreExceptionM 0 (read <$> getEnv C.envCallDepth)
 
 -- | This redo the target.
 -- This returns the signature of the target.
@@ -123,25 +123,29 @@ getCallDepth = ignoreExceptionM 0 (read <$> getEnv envCallDepth)
 -- * InvalidDependency
 -- * UnknownRedoCommand
 redo :: RedoTarget
-     -> IO Signature
+     -> IO ()
 redo target = do
   callDepth <- getCallDepth
   let indent = replicate callDepth ' '
-  printInfo $ "redo " ++ indent ++ target
+  C.printInfo $ "redo " ++ indent ++ target
   -- Try to lock the target, if False returns, it means that cyclic dependency exists.
   lockAcquired <- lockTarget target
   unless lockAcquired . throwIO $ CyclicDependency target
   unchanged <- upToDate $ ExistingDependency target AnySignature
   finally
     (if unchanged
-     then printInfo $ target ++ " is up to date."
+     then C.printInfo $ target ++ " is up to date."
      -- Run a do script unless it is up to date.
      else runDo target)
     (unlockTarget target)
-  sig <- fileSignature target
-  case sig of
-    NoSignature -> throwIO $ TargetNotGenerated target
-    _ -> return sig
+  maybeDepsPath <- lookupEnv C.envDependencyPath
+  case maybeDepsPath of
+    Nothing -> return ()
+    (Just depsPath) -> do
+      sig <- fileSignature target
+      case sig of
+        NoSignature -> throwIO $ TargetNotGenerated target
+        _ -> addDependency depsPath (ExistingDependency target sig)
 
 -- | This recursively visits its dependencies to test whether it is up to date.
 upToDate :: Dependency
@@ -171,7 +175,7 @@ upToDate (NonExistingDependency f) = not <$> doesFileExist f
 
 -- | This composes a file path to store dependencies.
 depFilePath :: RedoTarget -> FilePath
-depFilePath target = configPath </> encodePath target
+depFilePath target = C.depsDirPath </> encodePath target
 
 -- | This returns a list of dependencies, i.e. a file path and the signature.
 getDependencies :: RedoTarget
@@ -195,7 +199,7 @@ runDo target = do
   when (null doFiles) $ throwIO . NoDoFileExist $ target
 
   -- Create a temporary file to store dependencies.
-  tmpDeps <- createTempFile tempPath . takeFileName $ target
+  tmpDeps <- createTempFile C.tempDirPath . takeFileName $ target
   -- Create a temporary output file.
   tmpOut <- tempOutFilePath target
 
@@ -228,14 +232,14 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
   -- Add the do file itself as the 1st dependency.
   doSig <- fileSignature doFile
   addDependency tmpDeps $ ExistingDependency doFile doSig
-  opts <- getEnv envShellOptions
+  opts <- getEnv C.envShellOptions
   ec <- spawnCommand (cmds callDepth opts) >>= waitForProcess
   case ec of ExitFailure e -> throwIO $ DoExitFailure target e
              _ -> return ()
  where cmds callDepth opts =
-         unwords [envDependencyPath ++ "=" ++ quote tmpDeps,
-                  envCallDepth ++ "=" ++ show (callDepth + 1),
-                  envShellOptions ++ "=" ++ quote opts, "sh -e", opts,
+         unwords [C.envDependencyPath ++ "=" ++ quote tmpDeps,
+                  C.envCallDepth ++ "=" ++ show (callDepth + 1),
+                  C.envShellOptions ++ "=" ++ quote opts, "sh -e", opts,
                   quote doFile, quote target,
                   quote baseName, quote tmpOut]
 

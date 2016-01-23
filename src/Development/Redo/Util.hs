@@ -3,6 +3,7 @@ module Development.Redo.Util where
 
 import Development.Redo.Config
 
+import Control.Concurrent
 import Control.Exception
 import Control.Monad
 import Data.Char
@@ -13,6 +14,7 @@ import System.Directory
 import System.Environment
 import System.FilePath
 import System.IO
+import System.IO.Unsafe
 import System.Posix.Process
 import System.Posix.Semaphore
 import System.Posix.Types
@@ -116,14 +118,41 @@ getSemaphoreID = do
   semOpen sid (OpenSemFlags True False) (CMode 448) 0
 
 withProcessorToken :: Semaphore -> IO a -> IO a
-withProcessorToken sem = bracket_ (semThreadWait sem >> printProcessorTokens sem)
+-- withProcessorToken _ io = io
+withProcessorToken sem = bracket_ (semWait sem >> printProcessorTokens sem)
   (semPost sem >> printProcessorTokens sem)
 
 withoutProcessorToken :: Semaphore -> IO a -> IO a
+-- withoutProcessorToken _ io = io
 withoutProcessorToken sem = bracket_ (semPost sem >> printProcessorTokens sem)
-  (semThreadWait sem >> printProcessorTokens sem)
+  (semWait sem >> printProcessorTokens sem)
 
 printProcessorTokens :: Semaphore -> IO ()
 printProcessorTokens sem = do
   n <- semGetValue sem
   printDebug $ "Semaphores = " ++ show n
+
+children :: MVar [MVar ()]
+children = unsafePerformIO (newMVar [])
+
+waitForChildren :: IO ()
+waitForChildren = do
+  cs <- takeMVar children
+  case cs of
+    []   -> return ()
+    m:ms -> do
+      putMVar children ms
+      takeMVar m
+      waitForChildren
+
+forkChild :: IO () -> IO ThreadId
+forkChild io = do
+  nc <- getNumCapabilities
+  printDebug $ show nc
+  mvar <- newEmptyMVar
+  childs <- takeMVar children
+  putMVar children (mvar:childs)
+  forkFinally io (\_ -> putMVar mvar ())
+  -- tid <- forkOS io
+  -- putMVar mvar ()
+  -- return tid

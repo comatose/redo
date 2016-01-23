@@ -24,6 +24,7 @@ library
                        base >= 4 && < 5,
                        bytestring,
                        directory,
+                       filelock,
                        filepath,
                        process,
                        pureMD5,
@@ -44,10 +45,11 @@ executable redo
                        bytestring,
                        containers >= 0.5,
                        directory,
+                       filelock,
                        filepath,
                        process,
                        pureMD5,
                        simple-get-opt,
                        split,
                        unix
-  ghc-options:         -Wall -fno-warn-missing-signatures
+  ghc-options:         -Wall -fno-warn-missing-signatures -threaded

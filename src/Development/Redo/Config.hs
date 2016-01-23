@@ -3,22 +3,29 @@ module Development.Redo.Config where
 import System.Console.ANSI
 import System.FilePath
 import System.IO
+import System.FileLock
 
--- | This is the directory where dependencies are stored.
 configPath :: FilePath
 configPath = ".redo"
 
+-- | This is the directory where dependencies are stored.
+depsDirPath :: FilePath
+depsDirPath = configPath </> "deps"
+
 -- | This is the directory where temporary files are created.
-tempPath :: FilePath
-tempPath = configPath </> "tmp"
+tempDirPath :: FilePath
+tempDirPath = configPath </> "tmp"
 
 -- | This is the directory where lock files are created.
-lockPath :: FilePath
-lockPath = configPath </> "lock"
+lockDirPath :: FilePath
+lockDirPath = configPath </> "lock"
 
 -- | This is the directory where temporary output files are created.
-tempOutPath :: FilePath
-tempOutPath = tempPath </> "out"
+tempOutDirPath :: FilePath
+tempOutDirPath = tempDirPath </> "out"
+
+printLockPath :: FilePath
+printLockPath = configPath </> ".print_lock"
 
 envCallDepth :: String
 envCallDepth = "REDO_CALL_DEPTH"
@@ -35,27 +42,21 @@ envSemaphoreID = "REDO_SEM_ID"
 semaphorePrefix :: String
 semaphorePrefix = "/redo_sem_"
 
+printWithColor :: [SGR] -> String -> IO ()
+printWithColor _ = hPutStrLn stderr
+-- printWithColor color s = withFileLock printLockPath Exclusive $ const go
+--   where go = do hSetSGR stderr color
+--                 hPutStrLn stderr s
+--                 hSetSGR stderr [Reset]
 
 printInfo :: String -> IO ()
-printInfo s = do
-  hSetSGR stderr [SetColor Foreground Vivid Blue]
-  hPutStrLn stderr s
-  hSetSGR stderr [Reset]
+printInfo = printWithColor [SetColor Foreground Vivid Blue]
 
 printSuccess :: String -> IO ()
-printSuccess s = do
-  hSetSGR stderr [SetColor Foreground Vivid Green]
-  hPutStrLn stderr s
-  hSetSGR stderr [Reset]
+printSuccess = printWithColor [SetColor Foreground Vivid Green]
 
 printError :: String -> IO ()
-printError s = do
-  hSetSGR stderr [SetColor Foreground Vivid Red]
-  hPutStrLn stderr s
-  hSetSGR stderr [Reset]
+printError = printWithColor [SetColor Foreground Vivid Red]
 
 printDebug :: String -> IO ()
-printDebug s = do
-  hSetSGR stderr [SetColor Foreground Vivid Yellow]
-  hPutStrLn stderr s
-  hSetSGR stderr [Reset]
+printDebug = printWithColor [SetColor Foreground Vivid Yellow]

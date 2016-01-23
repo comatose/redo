@@ -4,7 +4,6 @@ import Development.Redo
 import Development.Redo.Config
 import Development.Redo.Util
 
-import Control.Applicative
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
@@ -67,15 +66,8 @@ main = do
       maybeDepsPath <- lookupEnv envDependencyPath
       cmd <- getProgName
       case cmd of
-        "redo" -> do {_ <- parRedo targets; return ()}
-        "redo-ifchange" -> do
-          -- Signature values of targets will be stored as dependency information.
-          sigs <- parRedo targets
-          case maybeDepsPath of
-            (Just depsPath) -> do
-              let deps = zipWith ExistingDependency targets sigs
-              mapM_ (addDependency depsPath) deps
-            Nothing -> return ()
+        "redo" -> parRedo targets
+        "redo-ifchange" -> parRedo targets
         "redo-ifcreate" ->
           case maybeDepsPath of
             (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency) targets
@@ -83,21 +75,24 @@ main = do
         _ -> throwIO $ UnknownRedoCommand cmd
       callDepth <- getCallDepth
       when (callDepth == 0) $ printSuccess "done"
-    parRedo [] = return []
+    parRedo [] = return ()
     parRedo (t:ts) = do
       sid <- getSemaphoreID
-      sigs <- mapM (withProcessorToken sid . redo) ts
-      (:sigs) <$> redo t
+      mapM_ (forkChild . withProcessorToken sid . redo) ts
+      redo t
+      withoutProcessorToken sid waitForChildren
 
 initialize :: IO [RedoTarget]
 initialize = do
   settings <- getOpts options
   callDepth <- getCallDepth
   when (callDepth == 0) $ do {
+    createFile printLockPath;
     when (help settings) (dumpUsage options >> exitSuccess);
     setEnv envShellOptions $ unwords [optsToStr settings verbose "-v",
                                      optsToStr settings xtrace "-x"];
-    createProcessorTokens (inPar settings - 1)
+    createProcessorTokens (inPar settings - 1);
+    setNumCapabilities $ inPar settings;
     }
   dir <- getCurrentDirectory
   -- Redo targets are created from the arguments.
