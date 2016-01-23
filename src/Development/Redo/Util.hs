@@ -10,6 +10,9 @@ import Numeric
 import System.Directory
 import System.FilePath
 import System.IO
+import System.Posix.Process
+import System.Posix.Semaphore
+import System.Posix.Types
 
 pathWords :: FilePath -> [FilePath]
 pathWords = splitOn [pathSeparator]
@@ -87,3 +90,19 @@ ignoreExceptionM r = handle (\(_ :: SomeException) -> return r)
 
 ignoreExceptionM_ :: IO () -> IO ()
 ignoreExceptionM_ = ignoreExceptionM ()
+
+createTokens :: Int -> IO (Semaphore, String)
+createTokens n = do
+  pid <- getProcessID
+  let sid = "/redo_sem_" ++ show pid
+  s <- semOpen sid (OpenSemFlags True False) (CMode 448) n
+  return (s, sid)
+
+acquireToken :: String -> IO Semaphore
+acquireToken sid = do
+  s <- semOpen sid (OpenSemFlags True False) (CMode 448) 0
+  semWait s
+  return s
+
+releaseToken :: Semaphore -> IO ()
+releaseToken s = semPost s
