@@ -21,6 +21,8 @@ import System.Exit
 import System.FilePath
 import System.IO
 import System.IO.Unsafe
+import System.Posix.Semaphore
+import System.Posix.Types
 import System.Process
 
 -- | A type for redo targets
@@ -59,19 +61,37 @@ data RedoException =
 instance Exception RedoException
 
 -- | This locks the target.
--- If already locked, this returns False.
-lockTarget :: RedoTarget -> IO Bool
+lockTarget :: RedoTarget -> IO ()
 lockTarget target = do
-  locked <- doesFileExist lockFile
-  if locked
-    then return False
-    else createFile lockFile >> return True
-  where lockFile = C.lockDirPath </> encodePath target
+  sem <- semOpen (C.targetLockPrefix ++ encodePath target)
+    (OpenSemFlags True False) (CMode 448) 1
+  semThreadWait sem
 
 -- | This unlocks the target.
 unlockTarget :: RedoTarget -> IO ()
-unlockTarget target
-  = ignoreExceptionM_ . removeFile $ C.lockDirPath </> encodePath target
+unlockTarget target = do
+  sem <- semOpen (C.targetLockPrefix ++ encodePath target)
+    (OpenSemFlags False False) (CMode 448) 1
+  semPost sem
+
+withTargetLock :: RedoTarget -> IO a -> IO a
+withTargetLock target = bracket_ (lockTarget target) (unlockTarget target)
+
+-- | This tries to mark the target as tracked.
+-- If already tracked, this returns False.
+-- This is for detecting the cyclic dependency.
+trackTarget :: RedoTarget -> IO Bool
+trackTarget target = do
+  let file = C.trackDirPath </> encodePath target
+  tracked <- doesFileExist file
+  if tracked
+    then return False
+    else createFile file >> return True
+
+-- | This untracks the target.
+untrackTarget :: RedoTarget -> IO ()
+untrackTarget target
+  = ignoreExceptionM_ . removeFile $ C.trackDirPath </> encodePath target
 
 -- | This returns a temp. file path for the target.
 -- This also creates directories for it.
@@ -112,6 +132,7 @@ redoTargetFromDir baseDir target =
 
 -- | Redo is a recursive procedure.  This returns the call depth.
 callDepth :: Int
+{-# NOINLINE callDepth #-}
 callDepth = unsafePerformIO $ ignoreExceptionM 0 (read <$> getEnv C.envCallDepth)
 
 -- | This redo the target.
@@ -129,7 +150,7 @@ redo target = do
   let indent = replicate callDepth ' '
   C.printInfo $ "redo " ++ indent ++ target
   -- Try to lock the target, if False returns, it means that cyclic dependency exists.
-  lockAcquired <- lockTarget target
+  lockAcquired <- trackTarget target
   unless lockAcquired . throwIO $ CyclicDependency target
   unchanged <- upToDate $ ExistingDependency target AnySignature
   finally
@@ -137,7 +158,7 @@ redo target = do
      then C.printInfo $ target ++ " is up to date."
      -- Run a do script unless it is up to date.
      else runDo target)
-    (unlockTarget target)
+    (untrackTarget target)
   case C.callerDepsPath of
     Nothing -> return ()
     (Just depsPath) -> do

@@ -24,8 +24,8 @@ tempDirPath :: FilePath
 tempDirPath = configDirPath </> "tmp"
 
 -- | This is the directory where lock files are created.
-lockDirPath :: FilePath
-lockDirPath = configDirPath </> "lock"
+trackDirPath :: FilePath
+trackDirPath = configDirPath </> "track"
 
 -- | This is the directory where temporary output files are created.
 tempOutDirPath :: FilePath
@@ -51,6 +51,9 @@ semaphorePrefix = "/redo_sem_"
 
 globalLockPrefix :: String
 globalLockPrefix = "/redo_global_lock_"
+
+targetLockPrefix :: String
+targetLockPrefix = "/redo_target_lock_"
 
 shellOptions :: String
 {-# NOINLINE shellOptions #-}
