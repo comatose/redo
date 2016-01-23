@@ -20,6 +20,7 @@ import System.Environment
 import System.Exit
 import System.FilePath
 import System.IO
+import System.IO.Unsafe
 import System.Process
 
 -- | A type for redo targets
@@ -110,8 +111,8 @@ redoTargetFromDir baseDir target =
   where target' = normalise' target
 
 -- | Redo is a recursive procedure.  This returns the call depth.
-getCallDepth :: IO Int
-getCallDepth = ignoreExceptionM 0 (read <$> getEnv C.envCallDepth)
+callDepth :: Int
+callDepth = unsafePerformIO $ ignoreExceptionM 0 (read <$> getEnv C.envCallDepth)
 
 -- | This redo the target.
 -- This returns the signature of the target.
@@ -125,7 +126,6 @@ getCallDepth = ignoreExceptionM 0 (read <$> getEnv C.envCallDepth)
 redo :: RedoTarget
      -> IO ()
 redo target = do
-  callDepth <- getCallDepth
   let indent = replicate callDepth ' '
   C.printInfo $ "redo " ++ indent ++ target
   -- Try to lock the target, if False returns, it means that cyclic dependency exists.
@@ -228,18 +228,18 @@ executeDo :: RedoTarget
           -> (String, FilePath)   -- ^ the redo's $2 argument and the do script
           -> IO ()
 executeDo target tmpDeps tmpOut (baseName, doFile) = do
-  callDepth <- getCallDepth
   -- Add the do file itself as the 1st dependency.
   doSig <- fileSignature doFile
   addDependency tmpDeps $ ExistingDependency doFile doSig
-  opts <- getEnv C.envShellOptions
-  ec <- spawnCommand (cmds callDepth opts) >>= waitForProcess
+  ec <- spawnCommand cmds >>= waitForProcess
   case ec of ExitFailure e -> throwIO $ DoExitFailure target e
              _ -> return ()
- where cmds callDepth opts =
+ where cmds =
          unwords [C.envDependencyPath ++ "=" ++ quote tmpDeps,
                   C.envCallDepth ++ "=" ++ show (callDepth + 1),
-                  C.envShellOptions ++ "=" ++ quote opts, "sh -e", opts,
+                  C.envShellOptions ++ "=" ++ quote C.shellOptions,
+                  C.envSessionID ++ "=" ++ quote C.sessionID,
+                  "sh -e", C.shellOptions,
                   quote doFile, quote target,
                   quote baseName, quote tmpOut]
 

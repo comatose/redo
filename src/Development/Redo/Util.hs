@@ -11,11 +11,9 @@ import Data.List
 import Data.List.Split
 import Numeric
 import System.Directory
-import System.Environment
 import System.FilePath
 import System.IO
 import System.IO.Unsafe
-import System.Posix.Process
 import System.Posix.Semaphore
 import System.Posix.Types
 
@@ -98,34 +96,31 @@ ignoreExceptionM_ = ignoreExceptionM ()
 
 createProcessorTokens :: Int -> IO ()
 createProcessorTokens n = do
-  pid <- getProcessID
-  let sid = semaphorePrefix ++ show pid
+  let sid = semaphorePrefix ++ sessionID
   _ <- semOpen sid (OpenSemFlags True True) (CMode 448) n
   printDebug $ "Semaphore '" ++ sid ++ "' with " ++ show n ++ " sems created."
-  setEnv envSemaphoreID sid
 
 destroyProcessorTokens :: IO ()
 destroyProcessorTokens = do
-  sid <- getEnv envSemaphoreID
-  sem <- semOpen sid (OpenSemFlags False False) (CMode 448) 0
+  sem <- semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
   n <- semGetValue sem
-  printDebug $ "Semaphore '" ++ sid ++ "' with " ++ show n ++ " sems destroyed."
-  semUnlink sid
+  printDebug $ "Semaphore '" ++ semaphoreID ++ "' with " ++ show n ++ " sems destroyed."
+  semUnlink semaphoreID
 
-getSemaphoreID :: IO Semaphore
-getSemaphoreID = do
-  sid <- getEnv envSemaphoreID
-  semOpen sid (OpenSemFlags True False) (CMode 448) 0
+semaphoreID :: String
+semaphoreID = semaphorePrefix ++ sessionID
 
-withProcessorToken :: Semaphore -> IO a -> IO a
--- withProcessorToken _ io = io
-withProcessorToken sem = bracket_ (semWait sem >> printProcessorTokens sem)
-  (semPost sem >> printProcessorTokens sem)
+semaphore :: Semaphore
+{-# NOINLINE semaphore #-}
+semaphore = unsafePerformIO $ semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
 
-withoutProcessorToken :: Semaphore -> IO a -> IO a
--- withoutProcessorToken _ io = io
-withoutProcessorToken sem = bracket_ (semPost sem >> printProcessorTokens sem)
-  (semWait sem >> printProcessorTokens sem)
+withProcessorToken :: IO a -> IO a
+withProcessorToken = bracket_ (semWait semaphore >> printProcessorTokens semaphore)
+  (semPost semaphore >> printProcessorTokens semaphore)
+
+withoutProcessorToken :: IO a -> IO a
+withoutProcessorToken = bracket_ (semPost semaphore >> printProcessorTokens semaphore)
+  (semWait semaphore >> printProcessorTokens semaphore)
 
 printProcessorTokens :: Semaphore -> IO ()
 printProcessorTokens sem = do
@@ -133,6 +128,7 @@ printProcessorTokens sem = do
   printDebug $ "Semaphores = " ++ show n
 
 children :: MVar [MVar ()]
+{-# NOINLINE children #-}
 children = unsafePerformIO (newMVar [])
 
 waitForChildren :: IO ()
@@ -147,12 +143,7 @@ waitForChildren = do
 
 forkChild :: IO () -> IO ThreadId
 forkChild io = do
-  nc <- getNumCapabilities
-  printDebug $ show nc
   mvar <- newEmptyMVar
   childs <- takeMVar children
   putMVar children (mvar:childs)
   forkFinally io (\_ -> putMVar mvar ())
-  -- tid <- forkOS io
-  -- putMVar mvar ()
-  -- return tid

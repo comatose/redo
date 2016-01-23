@@ -4,7 +4,6 @@ import Development.Redo
 import Development.Redo.Config
 import Development.Redo.Util
 
-import Control.Concurrent
 import Control.Exception
 import Control.Monad
 import SimpleGetOpt
@@ -73,26 +72,23 @@ main = do
             (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency) targets
             Nothing -> return ()
         _ -> throwIO $ UnknownRedoCommand cmd
-      callDepth <- getCallDepth
       when (callDepth == 0) $ printSuccess "done"
     parRedo [] = return ()
     parRedo (t:ts) = do
-      sid <- getSemaphoreID
-      mapM_ (forkChild . withProcessorToken sid . redo) ts
+      mapM_ (forkChild . withProcessorToken . redo) ts
       redo t
-      withoutProcessorToken sid waitForChildren
+      withoutProcessorToken waitForChildren
 
 initialize :: IO [RedoTarget]
 initialize = do
   settings <- getOpts options
-  callDepth <- getCallDepth
   when (callDepth == 0) $ do {
-    createFile printLockPath;
+    setSessionID;
+    createGlobalLock;
     when (help settings) (dumpUsage options >> exitSuccess);
     setEnv envShellOptions $ unwords [optsToStr settings verbose "-v",
                                      optsToStr settings xtrace "-x"];
     createProcessorTokens (inPar settings - 1);
-    setNumCapabilities $ inPar settings;
     }
   dir <- getCurrentDirectory
   -- Redo targets are created from the arguments.
@@ -100,6 +96,6 @@ initialize = do
  where optsToStr settings p o = if p settings then o else ""
 
 finalize :: IO ()
-finalize = do
-  callDepth <- getCallDepth
-  when (callDepth == 0) destroyProcessorTokens
+finalize =  when (callDepth == 0) $ do {
+  destroyProcessorTokens;
+  destroyGlobalLock}
