@@ -61,23 +61,15 @@ data RedoException =
 instance Exception RedoException
 
 -- | This prevents the race condition on a target among multiple redo processes.
+-- This may throw
+-- * CyclicDependency
 withTargetLock :: RedoTarget -> IO a -> IO a
 withTargetLock target io = do
-  sem <- semOpen (C.targetLockPrefix ++ encodePath target)
+-- detect cyclic dependency.
+  when (target `elem` C.targetHistory) . throwIO $ CyclicDependency target
+  sem <- semOpen (C.targetLockPrefix ++ C.sessionID ++ encodePath target)
     (OpenSemFlags True False) (CMode 448) 1
   bracket_ (semThreadWait sem) (semPost sem) io
-
--- | This is for detecting the cyclic dependency.
--- This is not thread-safe.
-withTargetGuard :: RedoTarget -> IO a -> IO a
-withTargetGuard target = bracket_ track untrack
- where file = C.trackDirPath </> encodePath target
-       track = do
-         cyclic <- doesFileExist file
-         if cyclic
-           then throwIO $ CyclicDependency target
-           else createFile file
-       untrack = ignoreExceptionM_ . removeFile $ file
 
 -- | This returns a temp. file path for the target.
 -- This also creates directories for it.
@@ -134,14 +126,13 @@ callDepth = unsafePerformIO $ ignoreExceptionM 0 (read <$> getEnv C.envCallDepth
 -- * UnknownRedoCommand
 redo :: RedoTarget
      -> IO ()
-redo target = withTargetLock target . withProcessorToken $ do
+redo target = withTargetLock target . C.withProcessorToken $ do
   let indent = replicate callDepth ' '
   C.printInfo $ "redo " ++ indent ++ target
-  withTargetGuard target $ do
-    p <- upToDate $ ExistingDependency target AnySignature
-    if p
-      then C.printInfo $ target ++ " is up to date."
-      else runDo target
+  p <- upToDate $ ExistingDependency target AnySignature
+  if p
+    then C.printInfo $ target ++ " is up to date."
+    else runDo target
   case C.callerDepsPath of
     Nothing -> return ()
     (Just depsPath) -> do
@@ -235,18 +226,21 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
   doSig <- fileSignature doFile
   addDependency tmpDeps $ ExistingDependency doFile doSig
   C.printDebug cmds
-  ec <- spawnCommand cmds >>= waitForProcess
+  ec <- runCmd >>= waitForProcess
   case ec of ExitFailure e -> throwIO $ DoExitFailure target e
              _ -> return ()
- where cmds =
-         unwords [C.envDependencyPath ++ "=" ++ quote tmpDeps,
-                  C.envCallDepth ++ "=" ++ show (callDepth + 1),
-                  C.envShellOptions ++ "=" ++ quote C.shellOptions,
-                  C.envSessionID ++ "=" ++ quote C.sessionID,
-                  C.envDebugMode ++ "=" ++ show C.debugMode,
-                  "sh -e", C.shellOptions,
-                  quote doFile, quote target,
-                  quote baseName, quote tmpOut]
+ where cmds = unwords ["sh -e", C.shellOptions, quote doFile,
+                       quote target, quote baseName, quote tmpOut]
+       runCmd = do
+         (_, _, _, h) <- createProcess $ (shell cmds)
+           {env = Just [(C.envDependencyPath, tmpDeps),
+                        (C.envCallDepth, show (callDepth + 1)),
+                        (C.envShellOptions, C.shellOptions),
+                        (C.envSessionID, C.sessionID),
+                        (C.envDebugMode, show C.debugMode),
+                        (C.envTargetHistory, show $ target:C.targetHistory)
+                       ]}
+         return h
 
 -- | This lists all applicable do files and redo's $2 names.
 -- e.g.

@@ -1,5 +1,7 @@
 module Development.Redo.Config where
 
+import Development.Redo.Util
+
 import Control.Applicative
 import Control.Exception
 import Control.Monad
@@ -23,10 +25,6 @@ depsDirPath = configDirPath </> "deps"
 tempDirPath :: FilePath
 tempDirPath = configDirPath </> "tmp"
 
--- | This is the directory where lock files are created.
-trackDirPath :: FilePath
-trackDirPath = configDirPath </> "track"
-
 -- | This is the directory where temporary output files are created.
 tempOutDirPath :: FilePath
 tempOutDirPath = tempDirPath </> "out"
@@ -45,6 +43,9 @@ envSessionID = "REDO_SESSION_ID"
 
 envDebugMode :: String
 envDebugMode = "REDO_DEBUG_MODE"
+
+envTargetHistory :: String
+envTargetHistory = "REDO_TARGET_HISTORY"
 
 semaphorePrefix :: String
 semaphorePrefix = "/redo_sem_"
@@ -125,3 +126,41 @@ callerDepsPath = unsafePerformIO $ lookupEnv envDependencyPath
 debugMode :: Bool
 {-# NOINLINE debugMode #-}
 debugMode = read . unsafePerformIO $ getEnv envDebugMode
+
+targetHistory :: [String]
+{-# NOINLINE targetHistory #-}
+-- targetHistory = unsafePerformIO $ read <$> getEnv envTargetHistory
+targetHistory = unsafePerformIO $ ignoreExceptionM [] (read <$> getEnv envTargetHistory)
+
+createProcessorTokens :: Int -> IO ()
+createProcessorTokens n = do
+  let sid = semaphorePrefix ++ sessionID
+  _ <- semOpen sid (OpenSemFlags True True) (CMode 448) n
+  printDebug $ "Semaphore '" ++ sid ++ "' with " ++ show n ++ " sems created."
+
+destroyProcessorTokens :: IO ()
+destroyProcessorTokens = do
+  sem <- semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
+  n <- semGetValue sem
+  printDebug $ "Semaphore '" ++ semaphoreID ++ "' with " ++ show n ++ " sems destroyed."
+  semUnlink semaphoreID
+
+semaphoreID :: String
+semaphoreID = semaphorePrefix ++ sessionID
+
+semaphore :: Semaphore
+{-# NOINLINE semaphore #-}
+semaphore = unsafePerformIO $ semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
+
+withProcessorToken :: IO a -> IO a
+withProcessorToken = bracket_ (semWait semaphore >> printProcessorTokens semaphore)
+  (semPost semaphore >> printProcessorTokens semaphore)
+
+withoutProcessorToken :: IO a -> IO a
+withoutProcessorToken = bracket_ (semPost semaphore >> printProcessorTokens semaphore)
+  (semWait semaphore >> printProcessorTokens semaphore)
+
+printProcessorTokens :: Semaphore -> IO ()
+printProcessorTokens sem = do
+  n <- semGetValue sem
+  printDebug $ "Semaphores = " ++ show n

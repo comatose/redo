@@ -1,8 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Development.Redo.Util where
 
-import Development.Redo.Config
-
 import Control.Concurrent
 import Control.Exception
 import Control.Monad
@@ -14,8 +12,6 @@ import System.Directory
 import System.FilePath
 import System.IO
 import System.IO.Unsafe
-import System.Posix.Semaphore
-import System.Posix.Types
 
 pathWords :: FilePath -> [FilePath]
 pathWords = splitOn [pathSeparator]
@@ -93,39 +89,6 @@ ignoreExceptionM r = handle (\(_ :: SomeException) -> return r)
 
 ignoreExceptionM_ :: IO () -> IO ()
 ignoreExceptionM_ = ignoreExceptionM ()
-
-createProcessorTokens :: Int -> IO ()
-createProcessorTokens n = do
-  let sid = semaphorePrefix ++ sessionID
-  _ <- semOpen sid (OpenSemFlags True True) (CMode 448) n
-  printDebug $ "Semaphore '" ++ sid ++ "' with " ++ show n ++ " sems created."
-
-destroyProcessorTokens :: IO ()
-destroyProcessorTokens = do
-  sem <- semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
-  n <- semGetValue sem
-  printDebug $ "Semaphore '" ++ semaphoreID ++ "' with " ++ show n ++ " sems destroyed."
-  semUnlink semaphoreID
-
-semaphoreID :: String
-semaphoreID = semaphorePrefix ++ sessionID
-
-semaphore :: Semaphore
-{-# NOINLINE semaphore #-}
-semaphore = unsafePerformIO $ semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
-
-withProcessorToken :: IO a -> IO a
-withProcessorToken = bracket_ (semWait semaphore >> printProcessorTokens semaphore)
-  (semPost semaphore >> printProcessorTokens semaphore)
-
-withoutProcessorToken :: IO a -> IO a
-withoutProcessorToken = bracket_ (semPost semaphore >> printProcessorTokens semaphore)
-  (semWait semaphore >> printProcessorTokens semaphore)
-
-printProcessorTokens :: Semaphore -> IO ()
-printProcessorTokens sem = do
-  n <- semGetValue sem
-  printDebug $ "Semaphores = " ++ show n
 
 children :: MVar [MVar ()]
 {-# NOINLINE children #-}
