@@ -18,6 +18,7 @@ import Control.Exception
 import Control.Monad
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Digest.Pure.MD5 as MD5
+import Data.Char
 import Data.List
 import Data.List.Split
 import Data.Typeable
@@ -224,22 +225,25 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
   -- Add the do file itself as the 1st dependency.
   doSig <- fileSignature doFile
   addDependency tmpDeps $ ExistingDependency doFile doSig
-  C.printDebug cmds
   ec <- runCmd >>= waitForProcess
   case ec of ExitFailure e -> throwIO $ DoExitFailure target e
              _ -> return ()
- where cmds = unwords ["sh", C.shellOptions, quote doFile, quote target,
-                       quote baseName, quote tmpOut]
-       runCmd = do
-         (_, _, _, h) <- createProcess $ (shell cmds)
-           {env = Just [(C.envDependencyPath, tmpDeps),
-                        (C.envCallDepth, show (C.callDepth + 1)),
-                        (C.envShellOptions, C.shellOptions),
-                        (C.envSessionID, C.sessionID),
-                        (C.envDebugMode, show C.debugMode),
-                        (C.envTargetHistory, show (target : C.targetHistory))
-                       ]}
-         return h
+ where
+   runCmd = do
+     let args = map quote [doFile, target, baseName, tmpOut]
+     exe <- getExecutor doFile
+     C.printDebug . unwords $ exe : args
+     (_, _, _, h) <- createProcess $ (shell . unwords $ exe : args)
+       {env = Just [(C.envDependencyPath, tmpDeps),
+                    (C.envCallDepth, show (C.callDepth + 1)),
+                    (C.envShellOptions, C.shellOptions),
+                    (C.envSessionID, C.sessionID),
+                    (C.envDebugMode, show C.debugMode),
+                    (C.envTargetHistory, show (target : C.targetHistory))]}
+     return h
+   getExecutor dofile = ignoreExceptionM ("sh " ++ C.shellOptions) $ do
+     ('#':'!':exe) <- withFile dofile ReadMode hGetLine
+     return $ dropWhile isSpace exe
 
 -- | This lists all applicable do files and redo's $2 names.
 -- e.g.
