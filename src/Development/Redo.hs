@@ -2,7 +2,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 
 module Development.Redo (addDependency,
-                         callDepth,
                          Dependency(..),
                          redo,
                          RedoException(..),
@@ -23,11 +22,9 @@ import Data.List
 import Data.List.Split
 import Data.Typeable
 import System.Directory
-import System.Environment
 import System.Exit
 import System.FilePath
 import System.IO
-import System.IO.Unsafe
 import System.Posix.Semaphore
 import System.Posix.Types
 import System.Process
@@ -115,11 +112,6 @@ redoTargetFromDir baseDir target =
     else makeRelative' baseDir target'
   where target' = normalise' target
 
--- | Redo is a recursive procedure.  This returns the call depth.
-callDepth :: Int
-{-# NOINLINE callDepth #-}
-callDepth = unsafePerformIO $ ignoreExceptionM 0 (read <$> getEnv C.envCallDepth)
-
 -- | This redo the target.
 -- This requires a target lock and a processor token to run.
 -- The order of acquisition is important to prevent deadlock.
@@ -134,7 +126,7 @@ callDepth = unsafePerformIO $ ignoreExceptionM 0 (read <$> getEnv C.envCallDepth
 redo :: RedoTarget
      -> IO ()
 redo target = withTargetLock target . C.withProcessorToken $ do
-  let indent = replicate callDepth ' '
+  let indent = replicate C.callDepth ' '
   C.printInfo $ "redo " ++ indent ++ target
   p <- upToDate $ ExistingDependency target AnySignature
   if p
@@ -236,16 +228,16 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
   ec <- runCmd >>= waitForProcess
   case ec of ExitFailure e -> throwIO $ DoExitFailure target e
              _ -> return ()
- where cmds = unwords ["sh -e", C.shellOptions, quote doFile,
-                       quote target, quote baseName, quote tmpOut]
+ where cmds = unwords ["sh", C.shellOptions, quote doFile, quote target,
+                       quote baseName, quote tmpOut]
        runCmd = do
          (_, _, _, h) <- createProcess $ (shell cmds)
            {env = Just [(C.envDependencyPath, tmpDeps),
-                        (C.envCallDepth, show (callDepth + 1)),
+                        (C.envCallDepth, show (C.callDepth + 1)),
                         (C.envShellOptions, C.shellOptions),
                         (C.envSessionID, C.sessionID),
                         (C.envDebugMode, show C.debugMode),
-                        (C.envTargetHistory, show $ target:C.targetHistory)
+                        (C.envTargetHistory, show (target : C.targetHistory))
                        ]}
          return h
 

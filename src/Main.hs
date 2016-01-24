@@ -16,20 +16,19 @@ options :: OptSpec RedoSettings
 options = OptSpec {
   progDefaults = RedoSettings {
       help = False,
-      verbose = False,
-      xtrace = False,
       inPar = 1,
       files = [],
+      shellOpts = "-e",
       debug = False
       },
   progOptions = [Option "h" ["help"] "Display usage."
                  $ NoArg $ \s -> Right s { help = True },
 
                  Option "v" ["verbose"] "Display more information while working."
-                 $ NoArg $ \s -> Right s { verbose = True },
+                 $ NoArg $ \s -> Right s { shellOpts = shellOpts s ++ " -v" },
 
                  Option "x" ["xtrace"] "Display more information while working."
-                 $ NoArg $ \s -> Right s { xtrace = True },
+                 $ NoArg $ \s -> Right s { shellOpts = shellOpts s ++ " -x" },
 
                  Option "p" ["par"] "The number of parallelism."
                  $ ReqArg "NUM" $ \a s -> case readMaybe a of
@@ -44,7 +43,12 @@ options = OptSpec {
 
 main :: IO ()
 main = do
-  targets <- initialize
+  settings <- getOpts options
+  when (help settings) $ dumpUsage options >> exitSuccess
+  initialize settings
+  dir <- getCurrentDirectory
+  -- Redo targets are created from the arguments.
+  let targets = map (redoTargetFromDir dir) (files settings)
   catch (main' targets) $ \e -> case e of
     (NoDoFileExist t) -> printError $ "no rule to make " ++ quote t
     (DoExitFailure t err) -> printError $ t ++ " failed with exitcode " ++ show err
@@ -79,21 +83,3 @@ main = do
       withoutProcessorToken $ do
         redo t
         waitForChildren
-
-initialize :: IO [RedoTarget]
-initialize = do
-  settings <- getOpts options
-  when (help settings) (dumpUsage options >> exitSuccess);
-  when (callDepth == 0) $ do {
-    configSession settings;
-    createGlobalLock;
-    createProcessorTokens (inPar settings - 1);
-    }
-  dir <- getCurrentDirectory
-  -- Redo targets are created from the arguments.
-  return $ map (redoTargetFromDir dir) (files settings)
-
-finalize :: IO ()
-finalize =  when (callDepth == 0) $ do {
-  destroyProcessorTokens;
-  destroyGlobalLock}

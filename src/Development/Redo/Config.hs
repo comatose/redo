@@ -1,17 +1,15 @@
-module Development.Redo.Config (callerDepsPath,
-                                configSession,
-                                createGlobalLock,
-                                createProcessorTokens,
+module Development.Redo.Config (callDepth,
+                                callerDepsPath,
                                 debugMode,
                                 depsDirPath,
-                                destroyGlobalLock,
-                                destroyProcessorTokens,
                                 envCallDepth,
                                 envDependencyPath,
                                 envDebugMode,
                                 envSessionID,
                                 envShellOptions,
                                 envTargetHistory,
+                                finalize,
+                                initialize,
                                 printDebug,
                                 printError,
                                 printInfo,
@@ -131,20 +129,11 @@ printDebug s = when debugMode $ printWithColor [SetColor Foreground Vivid Yellow
 
 data RedoSettings = RedoSettings {
   help :: Bool,
-  verbose :: Bool,
-  xtrace :: Bool,
   inPar :: Int,
   files :: [FilePath],
+  shellOpts :: String,
   debug :: Bool
   } deriving (Show, Read)
-
-configSession :: RedoSettings -> IO ()
-configSession settings = do
-  setEnv envSessionID sessionID
-  setEnv envShellOptions $ unwords [optsToStr verbose "-v",
-                                    optsToStr xtrace "-x"];
-  setEnv envDebugMode . show $ debug settings
- where optsToStr p o = if p settings then o else ""
 
 callerDepsPath :: Maybe FilePath
 {-# NOINLINE callerDepsPath #-}
@@ -153,6 +142,11 @@ callerDepsPath = unsafePerformIO $ lookupEnv envDependencyPath
 debugMode :: Bool
 {-# NOINLINE debugMode #-}
 debugMode = read . unsafePerformIO $ getEnv envDebugMode
+
+-- | Redo is a recursive procedure.  This returns the call depth.
+callDepth :: Int
+{-# NOINLINE callDepth #-}
+callDepth = unsafePerformIO $ ignoreExceptionM 0 (read <$> getEnv envCallDepth)
 
 targetHistory :: [String]
 {-# NOINLINE targetHistory #-}
@@ -191,3 +185,16 @@ printProcessorTokens :: Semaphore -> IO ()
 printProcessorTokens sem = do
   n <- semGetValue sem
   printDebug $ "Semaphores = " ++ show n
+
+initialize :: RedoSettings -> IO ()
+initialize settings = when (callDepth == 0) $ do
+  setEnv envSessionID sessionID
+  setEnv envShellOptions $ shellOpts settings
+  setEnv envDebugMode . show $ debug settings
+  createGlobalLock
+  createProcessorTokens (inPar settings - 1)
+
+finalize :: IO ()
+finalize =  when (callDepth == 0) $ do
+  destroyProcessorTokens
+  destroyGlobalLock
