@@ -1,7 +1,14 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 
-module Development.Redo where
+module Development.Redo (addDependency,
+                         callDepth,
+                         Dependency(..),
+                         redo,
+                         RedoException(..),
+                         RedoTarget,
+                         redoTargetFromDir
+                        ) where
 
 import qualified Development.Redo.Config as C
 import Development.Redo.Util

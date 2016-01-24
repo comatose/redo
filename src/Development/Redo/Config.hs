@@ -1,4 +1,31 @@
-module Development.Redo.Config where
+module Development.Redo.Config (callerDepsPath,
+                                configSession,
+                                createGlobalLock,
+                                createProcessorTokens,
+                                debugMode,
+                                depsDirPath,
+                                destroyGlobalLock,
+                                destroyProcessorTokens,
+                                envCallDepth,
+                                envDependencyPath,
+                                envDebugMode,
+                                envSessionID,
+                                envShellOptions,
+                                envTargetHistory,
+                                printDebug,
+                                printError,
+                                printInfo,
+                                printSuccess,
+                                RedoSettings(..),
+                                sessionID,
+                                shellOptions,
+                                targetHistory,
+                                targetLockPrefix,
+                                tempDirPath,
+                                tempOutDirPath,
+                                withoutProcessorToken,
+                                withProcessorToken,
+                               ) where
 
 import Development.Redo.Util
 

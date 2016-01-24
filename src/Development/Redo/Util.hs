@@ -1,5 +1,18 @@
 {-# LANGUAGE ScopedTypeVariables #-}
-module Development.Redo.Util where
+module Development.Redo.Util (createFile,
+                              createTempFile,
+                              decodePath,
+                              encodePath,
+                              forkChild,
+                              ignoreExceptionM,
+                              ignoreExceptionM_,
+                              makeRelative',
+                              moveFile,
+                              normalise',
+                              quote,
+                              spanM,
+                              waitForChildren
+                             ) where
 
 import Control.Concurrent
 import Control.Exception
