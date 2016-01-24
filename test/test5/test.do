@@ -1,6 +1,10 @@
 #!/usr/bin/env sh
 OUT_PATH=$(dirname $2)
-./redo-ifchange test0 ${OUT_PATH}/test-sub1.a ${OUT_PATH}/test-sub2.a ${OUT_PATH}/test-sub3.a ${OUT_PATH}/test-sub4.a ${OUT_PATH}/test-sub5.a
+DEPS=${OUT_PATH}/test0
+for i in $(seq 1 10); do
+    DEPS="${DEPS} ${OUT_PATH}/test-sub${i}.a"
+done
+./redo-ifchange ${DEPS}
 if [ -f flags ]; then
     ./redo-ifchange flags
 else
