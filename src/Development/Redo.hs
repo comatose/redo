@@ -60,38 +60,24 @@ data RedoException =
 
 instance Exception RedoException
 
--- | This locks the target.
-lockTarget :: RedoTarget -> IO ()
-lockTarget target = do
+-- | This prevents the race condition on a target among multiple redo processes.
+withTargetLock :: RedoTarget -> IO a -> IO a
+withTargetLock target io = do
   sem <- semOpen (C.targetLockPrefix ++ encodePath target)
     (OpenSemFlags True False) (CMode 448) 1
-  semThreadWait sem
+  bracket_ (semThreadWait sem) (semPost sem) io
 
--- | This unlocks the target.
-unlockTarget :: RedoTarget -> IO ()
-unlockTarget target = do
-  sem <- semOpen (C.targetLockPrefix ++ encodePath target)
-    (OpenSemFlags False False) (CMode 448) 1
-  semPost sem
-
-withTargetLock :: RedoTarget -> IO a -> IO a
-withTargetLock target = bracket_ (lockTarget target) (unlockTarget target)
-
--- | This tries to mark the target as tracked.
--- If already tracked, this returns False.
--- This is for detecting the cyclic dependency.
-trackTarget :: RedoTarget -> IO Bool
-trackTarget target = do
-  let file = C.trackDirPath </> encodePath target
-  tracked <- doesFileExist file
-  if tracked
-    then return False
-    else createFile file >> return True
-
--- | This untracks the target.
-untrackTarget :: RedoTarget -> IO ()
-untrackTarget target
-  = ignoreExceptionM_ . removeFile $ C.trackDirPath </> encodePath target
+-- | This is for detecting the cyclic dependency.
+-- This is not thread-safe.
+withTargetGuard :: RedoTarget -> IO a -> IO a
+withTargetGuard target = bracket_ track untrack
+ where file = C.trackDirPath </> encodePath target
+       track = do
+         cyclic <- doesFileExist file
+         if cyclic
+           then throwIO $ CyclicDependency target
+           else createFile file
+       untrack = ignoreExceptionM_ . removeFile $ file
 
 -- | This returns a temp. file path for the target.
 -- This also creates directories for it.
@@ -151,16 +137,11 @@ redo :: RedoTarget
 redo target = withTargetLock target . withProcessorToken $ do
   let indent = replicate callDepth ' '
   C.printInfo $ "redo " ++ indent ++ target
-  -- Try to lock the target, if False returns, it means that cyclic dependency exists.
-  lockAcquired <- trackTarget target
-  unless lockAcquired . throwIO $ CyclicDependency target
-  unchanged <- upToDate $ ExistingDependency target AnySignature
-  finally
-    (if unchanged
-     then C.printInfo $ target ++ " is up to date."
-     -- Run a do script unless it is up to date.
-     else runDo target)
-    (untrackTarget target)
+  withTargetGuard target $ do
+    p <- upToDate $ ExistingDependency target AnySignature
+    if p
+      then C.printInfo $ target ++ " is up to date."
+      else runDo target
   case C.callerDepsPath of
     Nothing -> return ()
     (Just depsPath) -> do
