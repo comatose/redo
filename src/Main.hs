@@ -2,10 +2,13 @@ module Main where
 
 import Development.Redo
 import Development.Redo.Config
+import Development.Redo.Future
 import Development.Redo.Util
 
+import Control.Applicative
 import Control.Exception
 import Control.Monad
+import Data.Either
 import SimpleGetOpt
 import System.Directory
 import System.Environment
@@ -76,10 +79,12 @@ main = do
     parRedo (t:ts) = do
       -- targets except the 1st one are handled by child threads.
       -- redo first acquires a target lock and then a processor token.
-      mapM_ (forkChild . redo) ts
+      futures <- mapM (async . redo) ts
       -- 1st target is handled by the main thread,
       -- which already has a processor token from the beginning of the execution.
       -- thus, release the token before redo.
       withoutProcessorToken $ do
-        redo t
-        waitForChildren
+        results <- liftA2 (:) (try $ redo t) (mapM wait futures)
+        case filter isLeft results of
+          (Left e : _) -> throwIO e
+          _ -> return ()

@@ -1,7 +1,7 @@
-module Development.Redo.Util (Future,
-                              async,
-                              waitAndGet
-                             ) where
+module Development.Redo.Future (Future,
+                                async,
+                                wait
+                               ) where
 
 import Control.Concurrent
 import Control.Exception
@@ -14,5 +14,10 @@ async io = do
   _ <- forkIO $ handle (putMVar mvar . Left) (io >>= putMVar mvar . Right)
   return $ Future mvar
 
-waitAndGet :: Future a -> IO (Either SomeException a)
-waitAndGet (Future mvar) = takeMVar mvar
+-- wait :: Future a -> IO ()
+-- wait (Future mvar) = do
+--   _ <- readMVar mvar
+--   return ()
+
+wait :: Future a -> IO (Either SomeException a)
+wait (Future mvar) = readMVar mvar

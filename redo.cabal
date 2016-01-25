@@ -34,6 +34,7 @@ library
   exposed-modules:
                        Development.Redo
                        Development.Redo.Config
+                       Development.Redo.Future
                        Development.Redo.Util
 
 executable redo
