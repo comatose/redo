@@ -4,5 +4,7 @@
   CLOSED: [2016-01-16 토 00:02]
 * DONE support output coloring.
   CLOSED: [2016-01-16 토 19:35]
+* DONE support parallel build.
+  CLOSED: [2016-01-26 화 00:33]
 * TODO support executing do files which not exist in the current directory.
-* TODO support parallel build.
+* TODO use future/promise for parallel build
