@@ -18,7 +18,7 @@ options = OptSpec {
       help = False,
       inPar = 1,
       files = [],
-      shellOpts = "-e",
+      shellOpts = " -e",
       debug = False
       },
   progOptions = [Option "h" ["help"] "Display usage."
@@ -45,19 +45,19 @@ main :: IO ()
 main = do
   settings <- getOpts options
   when (help settings) $ dumpUsage options >> exitSuccess
-  initialize settings
-  dir <- getCurrentDirectory
-  -- Redo targets are created from the arguments.
-  let targets = map (redoTargetFromDir dir) (files settings)
-  catch (main' targets) $ \e -> case e of
-    (NoDoFileExist t) -> printError $ "no rule to make " ++ quote t
-    (DoExitFailure t err) -> printError $ t ++ " failed with exitcode " ++ show err
-    (CyclicDependency f) -> printError $ "cyclic dependency detected for " ++ f
-    (TargetNotGenerated f) -> printError $ f ++ " was not generated"
-    (InvalidDependency f) -> printError $ f ++ " has invalid dependency"
-    (UnknownRedoCommand cmd) -> printError $ "unknown command: " ++ cmd
-  finalize
+  bracket_ (initialize settings) finalize $ do
+    dir <- getCurrentDirectory
+    -- Redo targets are created from the arguments.
+    let targets = map (redoTargetFromDir dir) (files settings)
+    catch (main' targets) $ \e -> case e of
+      (NoDoFileExist t) -> die $ "no rule to make " ++ quote t
+      (DoExitFailure t d err) -> die $ d ++ " for " ++ t ++ " failed with exitcode " ++ show err
+      (CyclicDependency f) -> die $ "cyclic dependency detected for " ++ f
+      (TargetNotGenerated t d) -> die $ d ++ " didn't generate " ++ t
+      (InvalidDependency f) -> die $ f ++ " has invalid dependency"
+      (UnknownRedoCommand cmd) -> die $ "unknown command: " ++ cmd
   where
+    die err = printError err >> exitFailure
     main' targets = do
       cmd <- getProgName
       case cmd of

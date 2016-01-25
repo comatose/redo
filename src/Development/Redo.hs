@@ -55,12 +55,12 @@ data Dependency =
   deriving (Show, Read)
 
 data RedoException =
-  NoDoFileExist FilePath |      -- ^ No .do files exist for the target.
-  DoExitFailure FilePath Int |  -- ^ .do script fails with the exit code.
-  CyclicDependency FilePath |   -- ^ cyclic dependency detected for the target.
-  TargetNotGenerated FilePath | -- ^ target is not generated even after redo completes.
-  InvalidDependency FilePath |  -- ^ redo dependencies are incorrectly recorded for the target.
-  UnknownRedoCommand String     -- ^ redo is called by an invalid prog. name.
+  NoDoFileExist RedoTarget |               -- ^ No .do files exist for the target.
+  DoExitFailure RedoTarget FilePath Int |  -- ^ .do script fails with the exit code.
+  CyclicDependency RedoTarget |            -- ^ cyclic dependency detected for the target.
+  TargetNotGenerated RedoTarget FilePath | -- ^ target is not generated even after redo completes.
+  InvalidDependency RedoTarget |           -- ^ redo dependencies are incorrectly recorded for the target.
+  UnknownRedoCommand String                -- ^ redo is called by an invalid prog. name.
   deriving (Show, Typeable)
 
 instance Exception RedoException
@@ -133,13 +133,13 @@ redo target = withTargetLock target . C.withProcessorToken $ do
   if p
     then C.printInfo $ target ++ " is up to date."
     else runDo target
-  case C.callerDepsPath of
-    Nothing -> return ()
-    (Just depsPath) -> do
-      sig <- fileSignature target
-      case sig of
-        NoSignature -> throwIO $ TargetNotGenerated target
-        _ -> addDependency depsPath (ExistingDependency target sig)
+  sig <- fileSignature target
+  C.printDebug . show $ (target, sig)
+  case sig of
+    NoSignature -> throwIO $ TargetNotGenerated target ""
+    _ -> case C.callerDepsPath of
+      Nothing -> C.printDebug $ "No deps file set for " ++ target
+      (Just depsPath) -> addDependency depsPath (ExistingDependency target sig)
 
 -- | This recursively visits its dependencies to test whether it is up to date.
 upToDate :: Dependency
@@ -226,8 +226,11 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
   doSig <- fileSignature doFile
   addDependency tmpDeps $ ExistingDependency doFile doSig
   ec <- runCmd >>= waitForProcess
-  case ec of ExitFailure e -> throwIO $ DoExitFailure target e
-             _ -> return ()
+  case ec of
+    ExitFailure e -> throwIO $ DoExitFailure target doFile e
+    _ -> do
+      built <- doesFileExist target
+      unless built $ throwIO (TargetNotGenerated target doFile)
  where
    runCmd = do
      let args = map quote [doFile, target, baseName, tmpOut]
@@ -241,9 +244,14 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
                     (C.envDebugMode, show C.debugMode),
                     (C.envTargetHistory, show (target : C.targetHistory))]}
      return h
-   getExecutor dofile = ignoreExceptionM ("sh " ++ C.shellOptions) $ do
-     ('#':'!':exe) <- withFile dofile ReadMode hGetLine
-     return $ dropWhile isSpace exe
+   getExecutor dofile = do
+     exe <- ignoreExceptionM "sh" $ do
+       ('#':'!':exe) <- withFile dofile ReadMode hGetLine
+       return $ strip exe
+     if "sh" `isSuffixOf` exe
+       then return $ exe ++ C.shellOptions
+       else return exe
+   strip = reverse . dropWhile isSpace . reverse . dropWhile isSpace
 
 -- | This lists all applicable do files and redo's $2 names.
 -- e.g.
