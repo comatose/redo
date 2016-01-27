@@ -20,7 +20,6 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.Digest.Pure.MD5 as MD5
 import Data.Char
 import Data.List
-import Data.List.Split
 import Data.Typeable
 import System.Directory
 import System.Exit

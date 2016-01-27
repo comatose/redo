@@ -27,7 +27,6 @@ library
                        filepath,
                        process,
                        pureMD5,
-                       split,
                        unix
   extensions:          ScopedTypeVariables,
                        DeriveDataTypeable
@@ -49,6 +48,5 @@ executable redo
                        process,
                        pureMD5,
                        simple-get-opt,
-                       split,
                        unix
   ghc-options:         -Wall -fno-warn-missing-signatures -threaded

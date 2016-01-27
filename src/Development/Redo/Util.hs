@@ -11,6 +11,7 @@ module Development.Redo.Util (createFile,
                               normalise',
                               quote,
                               spanM,
+                              splitOn,
                               waitForChildren
                              ) where
 
@@ -19,12 +20,17 @@ import Control.Exception
 import Control.Monad
 import Data.Char
 import Data.List
-import Data.List.Split
 import Numeric
 import System.Directory
 import System.FilePath
 import System.IO
 import System.IO.Unsafe
+
+splitOn :: Eq a => [a] -> [a] -> [[a]]
+splitOn seps = foldr go [[]]
+  where go x acc = if x `elem` seps
+                   then [] : acc
+                   else (x : head acc) : tail acc
 
 pathWords :: FilePath -> [FilePath]
 pathWords = splitOn [pathSeparator]
