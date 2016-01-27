@@ -228,7 +228,7 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
   case ec of
     ExitFailure e -> throwIO $ DoExitFailure target doFile e
     _ -> do
-      built <- doesFileExist target
+      built <- doesFileExist tmpOut
       unless built $ throwIO (TargetNotGenerated target doFile)
  where
    runCmd = do
