@@ -124,7 +124,7 @@ redoTargetFromDir baseDir target =
 -- * InvalidDependency
 -- * UnknownRedoCommand
 redo :: RedoTarget
-     -> IO ()
+     -> IO Signature
 redo target = withTargetLock target . C.withProcessorToken $ do
   let indent = replicate C.callDepth ' '
   C.printInfo $ "redo " ++ indent ++ target
@@ -132,13 +132,7 @@ redo target = withTargetLock target . C.withProcessorToken $ do
   if p
     then C.printInfo $ target ++ " is up to date."
     else runDo target
-  sig <- fileSignature target
-  C.printDebug . show $ (target, sig)
-  case sig of
-    NoSignature -> throwIO $ TargetNotGenerated target ""
-    _ -> case C.callerDepsPath of
-      Nothing -> C.printDebug $ "No deps file set for " ++ target
-      (Just depsPath) -> addDependency depsPath (ExistingDependency target sig)
+  fileSignature target
 
 -- | This recursively visits its dependencies to test whether it is up to date.
 upToDate :: Dependency

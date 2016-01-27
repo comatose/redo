@@ -5,6 +5,7 @@ import Development.Redo.Config
 import Development.Redo.Future
 import Development.Redo.Util
 
+import Control.Applicative
 import Control.Exception
 import Control.Monad
 import SimpleGetOpt
@@ -74,14 +75,16 @@ main = do
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"
     parRedo [] = return ()
-    parRedo (t:ts) = bracket
+    parRedo targets@(t:ts) = bracket
       -- targets except the 1st one are handled by child threads.
       -- redo first acquires a target lock and then a processor token.
       (mapM (async . redo) ts)
       (mapM cancel) $
-      -- 1st target is handled by the main thread,
+      -- 1stt target is handled by the main thread,
       -- which already has a processor token from the beginning of the execution.
       -- thus, release the token before redo.
       \futures -> withoutProcessorToken $ do
-        redo t
-        mapM_ wait futures
+        sigs <- liftA2 (:) (redo t) (mapM wait futures)
+        case callerDepsPath of
+            (Just depsPath) -> zipWithM_ (\s -> addDependency depsPath . ExistingDependency s) targets sigs
+            Nothing -> return ()
