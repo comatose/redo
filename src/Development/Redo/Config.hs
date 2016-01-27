@@ -110,10 +110,8 @@ withGlobalLock :: IO a -> IO a
 withGlobalLock = bracket_ (semThreadWait globalLock) (semPost globalLock)
 
 printWithColor :: [SGR] -> String -> IO ()
-printWithColor color s = withGlobalLock go
-  where go = do hSetSGR stderr color
-                hPutStrLn stderr s
-                hSetSGR stderr [Reset]
+printWithColor color s = ignoreExceptionM_ . withGlobalLock $ bracket_
+  (hSetSGR stderr color) (hSetSGR stderr [Reset]) (hPutStrLn stderr s)
 
 printInfo :: String -> IO ()
 printInfo = printWithColor [SetColor Foreground Vivid Blue]

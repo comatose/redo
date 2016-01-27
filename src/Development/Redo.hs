@@ -192,7 +192,7 @@ runDo target = do
   when (null doFiles) $ throwIO . NoDoFileExist $ target
 
   -- Create a temporary file to store dependencies.
-  tmpDeps <- createTempFile C.tempDirPath . takeFileName $ target
+  tmpDeps <- createTempFile C.tempDirPath . takeFileName $ target ++ ".deps"
   -- Create a temporary output file.
   tmpOut <- tempOutFilePath target
 

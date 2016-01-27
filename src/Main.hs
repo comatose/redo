@@ -5,10 +5,8 @@ import Development.Redo.Config
 import Development.Redo.Future
 import Development.Redo.Util
 
-import Control.Applicative
 import Control.Exception
 import Control.Monad
-import Data.Either
 import SimpleGetOpt
 import System.Directory
 import System.Environment
@@ -76,15 +74,14 @@ main = do
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"
     parRedo [] = return ()
-    parRedo (t:ts) = do
+    parRedo (t:ts) = bracket
       -- targets except the 1st one are handled by child threads.
       -- redo first acquires a target lock and then a processor token.
-      futures <- mapM (async . redo) ts
+      (mapM (async . redo) ts)
+      (mapM cancel) $
       -- 1st target is handled by the main thread,
       -- which already has a processor token from the beginning of the execution.
       -- thus, release the token before redo.
-      withoutProcessorToken $ do
-        results <- liftA2 (:) (try $ redo t) (mapM wait futures)
-        case filter isLeft results of
-          (Left e : _) -> throwIO e
-          _ -> return ()
+      \futures -> withoutProcessorToken $ do
+        redo t
+        mapM_ wait futures
