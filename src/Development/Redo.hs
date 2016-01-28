@@ -1,11 +1,12 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 
-module Development.Redo (addDependency,
+module Development.Redo (recordDependency,
                          Dependency(..),
                          redo,
                          RedoException(..),
                          RedoTarget,
+                         redoTarget,
                          redoTargetFromDir
                         ) where
 
@@ -32,9 +33,6 @@ import System.Process
 -- | A type for redo targets
 -- This should be constructed from 'redoTarget' or 'redoTargetFromDir'.
 type RedoTarget = FilePath
--- newtype RedoTarget = RedoTarget {
---   targetPath :: String       -- ^ the relative path to the target
---   } deriving (Show, Read)
 
 data Signature =
   NoSignature |        -- ^ for non-existing files
@@ -50,7 +48,7 @@ instance Eq Signature where
 
 data Dependency =
   NonExistingDependency FilePath |      -- ^ non existing dependency issued by `redo-ifcreate`
-  ExistingDependency FilePath Signature -- ^ existing dependency
+  ExistingDependency RedoTarget Signature -- ^ existing dependency
   deriving (Show, Read)
 
 data RedoException =
@@ -64,45 +62,49 @@ data RedoException =
 
 instance Exception RedoException
 
--- | This prevents the race condition on a target among multiple redo processes.
--- This may throw
--- * CyclicDependency
+-- | This ensures only one thread to process a target exclusively and
+-- detects a cyclic dependency.
+--
+-- This may throw: * 'CyclicDependency' if a thread tries to acquire
+-- the target lock which is already occupied by the thread.
 withTargetLock :: RedoTarget -> IO a -> IO a
 withTargetLock target io = do
--- detect cyclic dependency.
+  -- 'targetHistory' contains a list of targets which are being
+  -- processed by parent processes.
   when (target `elem` C.targetHistory) . throwIO $ CyclicDependency target
+
+  -- Use a named semaphore to provide a lock for the target.
   sem <- semOpen (C.targetLockPrefix ++ C.sessionID ++ encodePath target)
     (OpenSemFlags True False) (CMode 448) 1
   bracket_ (semThreadWait sem) (semPost sem) io
 
--- | This returns a temp. file path for the target.
--- This also creates directories for it.
--- This doesn't create the temp. file.
+-- | This returns a temporary file path for the output target.  This
+-- does not create the file, but involves creating directories for it.
 tempOutFilePath :: RedoTarget -> IO FilePath
 tempOutFilePath target = do
   createDirectoryIfMissing True C.tempOutDirPath
   return $ C.tempOutDirPath </> encodePath target
 
--- | Return the signature of a file.
+-- | Thes returns the signature of a file.
 fileSignature :: FilePath -> IO Signature
 fileSignature f =
-  -- any exception (e.g. file not exists.) causes NoSignature.
+  -- any exception (e.g. file does not exists.) causes NoSignature.
   ignoreExceptionM NoSignature (Signature . show . MD5.md5 <$> BL.readFile f)
 
--- | Add a dependency entry into a file.
-addDependency :: FilePath   -- ^ the file which a dependency will be appended to
-              -> Dependency -- ^ the dependency
-              -> IO ()
-addDependency depsFile dep = withFile depsFile AppendMode (`hPrint` dep)
+-- | This records a dependency entry in the file.
+recordDependency :: FilePath   -- ^ the file which a dependency will be appended to
+                 -> Dependency -- ^ the dependency information
+                 -> IO ()
+recordDependency depsFile dep = withFile depsFile AppendMode (`hPrint` dep)
 
--- | Create a redo target for a file.
+-- | This creates a redo target for a file.
 -- This calls 'redoTargetFromDir' with the current directory.
 redoTarget :: FilePath       -- ^ the file path
            -> IO RedoTarget
 redoTarget target = flip redoTargetFromDir target <$> getCurrentDirectory
 
--- | Create a redo target for a file.
--- This builds a redo target with a relative path for the file.
+-- | This creates a redo target for a file.
+-- This returns 'RedoTarget' created with a relative path for the file.
 redoTargetFromDir :: FilePath    -- ^ the base directory, this should be an absolute path.
                   -> FilePath    -- ^ the file path
                   -> RedoTarget
@@ -112,17 +114,18 @@ redoTargetFromDir baseDir target =
     else makeRelative' baseDir target'
   where target' = normalise' target
 
--- | This redo the target.
--- This requires a target lock and a processor token to run.
--- The order of acquisition is important to prevent deadlock.
--- This returns the signature of the target.
--- This may throw
--- * CyclicDependency
--- * TargetNotGenerated
--- * NoDoFileExist
--- * DoExitFailure
--- * InvalidDependency
--- * UnknownRedoCommand
+-- | This performs redo for the target.  This requires a target lock
+-- and a processor token to run.  The order of acquisition is
+-- important to prevent deadlock. (i.e. a target lock first, and then
+-- a processor token) This returns the signature of the target.
+--
+-- This may throw:
+-- * 'CyclicDependency' if a dependency cycle is detected.
+-- * 'TargetNotGenerated' if the target is not generated even after performing redo.
+-- * 'NoDoFileExist' if the target file does not exists and neither do the proper do-scripts.
+-- * 'DoExitFailure' if any do-script exited with failure.
+-- * 'InvalidDependency' if dependency information is recorded incorrectly.
+-- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
 redo :: RedoTarget
      -> IO Signature
 redo target = withTargetLock target . C.withProcessorToken $ do
@@ -135,36 +138,37 @@ redo target = withTargetLock target . C.withProcessorToken $ do
   fileSignature target
 
 -- | This recursively visits its dependencies to test whether it is up to date.
+--
+-- This may throw:
+-- * 'InvalidDependency' if dependency information is recorded incorrectly.
 upToDate :: Dependency
          -> IO Bool
-upToDate (ExistingDependency f oldSig) = do
-  newSig <- fileSignature f
+upToDate (ExistingDependency target oldSig) = do
+  newSig <- fileSignature target
   -- first, check if the target has been changed.
-  -- print (f, oldSig, newSig)
   if oldSig /= newSig
     then return False
     else do
-      target <- redoTarget f
       maybeDeps <- getDependencies target
       case maybeDeps of
         -- Nothing means that no dependency configuration file exist.
-        -- This is not generated by redo.
+        -- This indicates that the target was not generated by redo.
         Nothing -> return True
         -- Now, it is assured that the target was generated by redo.
         (Just deps@(ExistingDependency aDo _:_)) -> do
           -- aDo is the do file used to generate the target
           -- exDos are do files which have a higher priority than aDo.
           let exDos =  takeWhile (/= aDo) . map snd $ listDoFiles target
-          -- checks non-existing dependency for exDos
+          -- call 'upToData' for exDos as well as recorded dependencies.
           and <$> mapM upToDate (map NonExistingDependency exDos ++ deps)
-        _ -> throwIO $ InvalidDependency f
-upToDate (NonExistingDependency f) = not <$> doesFileExist f
+        _ -> throwIO $ InvalidDependency target
+upToDate (NonExistingDependency target) = not <$> doesFileExist target
 
 -- | This composes a file path to store dependencies.
 depFilePath :: RedoTarget -> FilePath
 depFilePath target = C.depsDirPath </> encodePath target
 
--- | This returns a list of dependencies, i.e. a file path and the signature.
+-- | This returns a list of dependencies.
 getDependencies :: RedoTarget
                 -> IO (Maybe [Dependency])
 getDependencies target = ignoreExceptionM Nothing $
@@ -172,13 +176,14 @@ getDependencies target = ignoreExceptionM Nothing $
      return . Just . map read $ depLines
 
 -- | This finds an appropriate do script and runs it if it exists.
--- This may throw
--- * CyclicDependency
--- * TargetNotGenerated
--- * NoDoFileExist
--- * DoExitFailure
--- * InvalidDependency
--- * UnknownRedoCommand
+--
+-- This may throw:
+-- * 'CyclicDependency' if a dependency cycle is detected.
+-- * 'TargetNotGenerated' if the target is not generated even after performing redo.
+-- * 'NoDoFileExist' if the target file does not exists and neither do the proper do-scripts.
+-- * 'DoExitFailure' if any do-script exited with failure.
+-- * 'InvalidDependency' if dependency information is recorded incorrectly.
+-- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
 runDo :: RedoTarget
       -> IO ()
 runDo target = do
@@ -202,13 +207,14 @@ runDo target = do
   ignoreExceptionM_ $ moveFile tmpDeps (depFilePath target)
 
 -- | This executes the do file.
--- This may throw
--- * CyclicDependency
--- * TargetNotGenerated
--- * NoDoFileExist
--- * DoExitFailure
--- * InvalidDependency
--- * UnknownRedoCommand
+--
+-- This may throw:
+-- * 'CyclicDependency' if a dependency cycle is detected.
+-- * 'TargetNotGenerated' if the target is not generated even after performing redo.
+-- * 'NoDoFileExist' if the target file does not exists and neither do the proper do-scripts.
+-- * 'DoExitFailure' if any do-script exited with failure.
+-- * 'InvalidDependency' if dependency information is recorded incorrectly.
+-- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
 executeDo :: RedoTarget
           -> FilePath             -- ^ temporary file for storing dependencies
           -> FilePath             -- ^ temporary file for output (redo's $3 argument)
@@ -217,13 +223,12 @@ executeDo :: RedoTarget
 executeDo target tmpDeps tmpOut (baseName, doFile) = do
   -- Add the do file itself as the 1st dependency.
   doSig <- fileSignature doFile
-  addDependency tmpDeps $ ExistingDependency doFile doSig
+  recordDependency tmpDeps $ ExistingDependency doFile doSig
   ec <- runCmd >>= waitForProcess
   case ec of
     ExitFailure e -> throwIO $ DoExitFailure target doFile e
-    _ -> do
-      built <- doesFileExist tmpOut
-      unless built $ throwIO (TargetNotGenerated target doFile)
+    _ -> do built <- doesFileExist tmpOut
+            unless built $ throwIO (TargetNotGenerated target doFile)
  where
    runCmd = do
      let args = map quote [doFile, target, baseName, tmpOut]
@@ -242,6 +247,7 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
        ('#':'!':exe) <- withFile dofile ReadMode hGetLine
        return $ strip exe
      if "sh" `isSuffixOf` exe
+        -- if the executable is ends with sh, it will run with shell options.
        then return $ exe ++ C.shellOptions
        else return exe
    strip = reverse . dropWhile isSpace . reverse . dropWhile isSpace

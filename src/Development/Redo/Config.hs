@@ -39,10 +39,11 @@ import System.Posix.Process
 import System.Posix.Semaphore
 import System.Posix.Types
 
+-- | This is the directory where all redo configurations are located.
 configDirPath :: FilePath
 configDirPath = ".redo"
 
--- | This is the directory where dependencies are stored.
+-- | This is the directory where dependency files are located.
 depsDirPath :: FilePath
 depsDirPath = configDirPath </> "deps"
 

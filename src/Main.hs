@@ -26,13 +26,13 @@ options = OptSpec {
   progOptions = [Option "h" ["help"] "Display usage."
                  $ NoArg $ \s -> Right s { help = True },
 
-                 Option "v" ["verbose"] "Display more information while working."
+                 Option "v" ["verbose"] "Run with -v (for shells only)."
                  $ NoArg $ \s -> Right s { shellOpts = shellOpts s ++ " -v" },
 
-                 Option "x" ["xtrace"] "Display more information while working."
+                 Option "x" ["xtrace"] "Run with -x (for shells only)."
                  $ NoArg $ \s -> Right s { shellOpts = shellOpts s ++ " -x" },
 
-                 Option "p" ["par"] "The number of parallelism."
+                 Option "p" ["par"] "Set the number of threads to use."
                  $ ReqArg "NUM" $ \a s -> case readMaybe a of
                     Just n | n > 0  -> Right s { inPar = n }
                     _               -> Left "Invalid value for `par`",
@@ -40,7 +40,7 @@ options = OptSpec {
                  Option "D" ["debug"] "Display debug information."
                  $ NoArg $ \s -> Right s { debug = True }],
 
-  progParamDocs = [ ("FILES",   "The files that need processing.") ],
+  progParamDocs = [ ("FILES",   "Target list") ],
   progParams = \p s -> Right s { files = files s ++ [p] }}
 
 main :: IO ()
@@ -70,21 +70,21 @@ main = do
           -- with a file path given via an environment variable.
           -- The file is used to store the dependency information.
           case callerDepsPath of
-            (Just depsPath) -> mapM_ (addDependency depsPath . NonExistingDependency) targets
+            (Just depsPath) -> mapM_ (recordDependency depsPath . NonExistingDependency) targets
             Nothing -> return ()
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"
-    parRedo [] = return ()
     parRedo targets@(t:ts) = bracket
-      -- targets except the 1st one are handled by child threads.
-      -- redo first acquires a target lock and then a processor token.
+      -- Targets except the 1st one are handled by sub-threads (using 'async').
+      -- Each thread tries to acquire a target lock and a processor token.
       (mapM (async . redo) ts)
       (mapM cancel) $
-      -- 1stt target is handled by the main thread,
-      -- which already has a processor token from the beginning of the execution.
-      -- thus, release the token before redo.
+      -- The main thread owns its own processor token when it starts.
+      -- Thus, it release the token before invoking 'redo' and waiting for futures.
       \futures -> withoutProcessorToken $ do
+        -- Futures return file signatures of the targets.
         sigs <- liftA2 (:) (redo t) (mapM wait futures)
         case callerDepsPath of
-            (Just depsPath) -> zipWithM_ (\s -> addDependency depsPath . ExistingDependency s) targets sigs
+            (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
             Nothing -> return ()
+    parRedo _ = return ()
