@@ -23,6 +23,7 @@ import Data.Char
 import Data.List
 import Data.Typeable
 import System.Directory
+import System.Environment
 import System.Exit
 import System.FilePath
 import System.IO
@@ -234,13 +235,14 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
      let args = map quote [doFile, target, baseName, tmpOut]
      exe <- getExecutor doFile
      C.printDebug . unwords $ exe : args
+     oldEnv <- getEnvironment
      (_, _, _, h) <- createProcess $ (shell . unwords $ exe : args)
-       {env = Just [(C.envDependencyPath, tmpDeps),
-                    (C.envCallDepth, show (C.callDepth + 1)),
-                    (C.envShellOptions, C.shellOptions),
-                    (C.envSessionID, C.sessionID),
-                    (C.envDebugMode, show C.debugMode),
-                    (C.envTargetHistory, show (target : C.targetHistory))]}
+       {env = Just $ oldEnv ++ [(C.envDependencyPath, tmpDeps),
+                      (C.envCallDepth, show (C.callDepth + 1)),
+                      (C.envShellOptions, C.shellOptions),
+                      (C.envSessionID, C.sessionID),
+                      (C.envDebugMode, show C.debugMode),
+                      (C.envTargetHistory, show (target : C.targetHistory))]}
      return h
    getExecutor dofile = do
      exe <- ignoreExceptionM "sh" $ do
