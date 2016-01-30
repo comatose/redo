@@ -1,0 +1,7 @@
+flags: {}
+extra-package-dbs: []
+packages:
+- '.'
+extra-deps:
+- simple-get-opt-0.1.0.0
+resolver: lts-5.0

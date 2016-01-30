@@ -27,7 +27,6 @@ module Development.Redo.Config (callDepth,
 
 import Development.Redo.Util
 
-import Control.Applicative
 import Control.Exception
 import Control.Monad
 import System.Console.ANSI

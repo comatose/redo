@@ -13,7 +13,6 @@ module Development.Redo (recordDependency,
 import qualified Development.Redo.Config as C
 import Development.Redo.Util
 
-import Control.Applicative
 import Control.Arrow
 import Control.Exception
 import Control.Monad
