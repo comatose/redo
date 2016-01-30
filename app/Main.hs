@@ -59,6 +59,7 @@ main = do
       (InvalidDependency f) -> die $ f ++ " has invalid dependency"
       (UnknownRedoCommand cmd) -> die $ "unknown command: " ++ cmd
   where
+    die s = printError s >> exitFailure
     main' targets = do
       cmd <- getProgName
       case cmd of

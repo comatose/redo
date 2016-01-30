@@ -14,6 +14,7 @@ import qualified Development.Redo.Config as C
 import Development.Redo.Util
 
 import Control.Arrow
+import Control.Applicative
 import Control.Exception
 import Control.Monad
 import qualified Data.ByteString.Lazy as BL
