@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Development.Redo.Config (callDepth,
                                 callerDepsPath,
                                 debugMode,
@@ -34,6 +36,7 @@ import Control.Exception
 import Control.Monad
 import System.Console.ANSI
 import System.Environment
+import System.Exit
 import System.FilePath
 import System.IO
 import System.IO.Unsafe
@@ -182,17 +185,17 @@ semaphore :: Semaphore
 semaphore = unsafePerformIO $ semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
 
 withProcessorToken :: IO a -> IO a
-withProcessorToken = bracket_ (semWait semaphore >> printProcessorTokens semaphore)
-  (semPost semaphore >> printProcessorTokens semaphore)
+withProcessorToken action = handle (\(_ :: SomeException) -> exitFailure) $
+  bracket_ (semWait semaphore) (semPost semaphore) action
 
 withoutProcessorToken :: IO a -> IO a
-withoutProcessorToken = bracket_ (semPost semaphore >> printProcessorTokens semaphore)
-  (semWait semaphore >> printProcessorTokens semaphore)
+withoutProcessorToken action = handle (\(_ :: SomeException) -> exitFailure) $
+  bracket_ (semPost semaphore) (semWait semaphore) action
 
-printProcessorTokens :: Semaphore -> IO ()
-printProcessorTokens sem = do
-  n <- semGetValue sem
-  printDebug $ "Semaphores = " ++ show n
+-- printProcessorTokens :: Semaphore -> IO ()
+-- printProcessorTokens sem = do
+--   n <- semGetValue sem
+--   printDebug $ "Semaphores = " ++ show n
 
 initialize :: RedoSettings -> IO ()
 initialize settings = when (callDepth == 0) $ do
