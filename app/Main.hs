@@ -51,7 +51,7 @@ main = do
     dir <- getCurrentDirectory
     -- Redo targets are created from the arguments.
     let targets = map (redoTargetFromDir dir) (files settings)
-    catch (main' targets) $ \e -> case e of
+    catch (main' settings targets) $ \e -> case e of
       (NoDoFileExist t) -> die $ "no rule to make " ++ quote t
       (DoExitFailure t d err) -> die $ d ++ " for " ++ t ++ " failed with exitcode " ++ show err
       (CyclicDependency f) -> die $ "cyclic dependency detected for " ++ f
@@ -60,11 +60,11 @@ main = do
       (UnknownRedoCommand cmd) -> die $ "unknown command: " ++ cmd
   where
     die s = printError s >> exitFailure
-    main' targets = do
+    main' settings targets = do
       cmd <- getProgName
       case cmd of
-        "redo" -> parRedo targets
-        "redo-ifchange" -> parRedo targets
+        "redo" -> parRedo (inPar settings) targets
+        "redo-ifchange" -> parRedo (inPar settings) targets
         "redo-ifcreate" ->
           -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
           -- with a file path given via an environment variable.
@@ -74,7 +74,12 @@ main = do
             Nothing -> return ()
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"
-    parRedo targets@(t:ts) = bracket
+    parRedo 1 targets = do
+      sigs <- withoutProcessorToken $ mapM redo targets
+      case callerDepsPath of
+        (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
+        Nothing -> return ()
+    parRedo _ targets@(t:ts) = bracket
       -- Targets except the 1st one are handled by sub-threads (using 'async').
       -- Each thread tries to acquire a target lock and a processor token.
       (mapM (async . redo) ts)
@@ -87,4 +92,4 @@ main = do
         case callerDepsPath of
             (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
             Nothing -> return ()
-    parRedo _ = return ()
+    parRedo _ _ = return ()
