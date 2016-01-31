@@ -144,7 +144,8 @@ redo fs = do
    go _ targets@(t:ts) = bracket
      -- Targets except the 1st one are handled by sub-threads (using 'async').
      -- Each thread tries to acquire a target lock and a processor token.
-     (mapM (async . redo') ts)
+     -- (mapM (async . redo') ts)
+     (parAsync ts)
      (mapM cancel) $
      -- The main thread owns its own processor token when it starts.
      -- Thus, it release the token before invoking 'redo' and waiting for futures.
@@ -157,6 +158,12 @@ redo fs = do
        case C.callerDepsPath of
          (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
          Nothing -> return ()
+   parAsync [] = return []
+   parAsync (t:ts) = do
+     f <- async $ redo' t
+     catch ((f:) <$> parAsync ts) $ \(_ :: SomeException) -> do
+       cancel f
+       return []
 
 -- |
 -- This may throw:
