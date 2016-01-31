@@ -1,20 +1,28 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 
-module Development.Redo (recordDependency,
-                         Dependency(..),
-                         redo,
+module Development.Redo (redo,
+                         redoIfChange,
+                         redoIfCreate,
                          RedoException(..),
-                         RedoTarget,
-                         redoTarget,
-                         redoTargetFromDir
+                         withRedo,
+                         C.callDepth,
+                         C.finalize,
+                         C.initialize,
+                         C.RedoSettings(..),
+                         C.printDebug,
+                         C.printError,
+                         C.printInfo,
+                         C.printSuccess
                         ) where
 
 import qualified Development.Redo.Config as C
+import Development.Redo.Future
 import Development.Redo.Util
 
 import Control.Arrow
 import Control.Applicative
+-- import Control.Concurrent.Async
 import Control.Exception
 import Control.Monad
 import qualified Data.ByteString.Lazy as BL
@@ -99,12 +107,6 @@ recordDependency :: FilePath   -- ^ the file which a dependency will be appended
 recordDependency depsFile dep = withFile depsFile AppendMode (`hPrint` dep)
 
 -- | This creates a redo target for a file.
--- This calls 'redoTargetFromDir' with the current directory.
-redoTarget :: FilePath       -- ^ the file path
-           -> IO RedoTarget
-redoTarget target = flip redoTargetFromDir target <$> getCurrentDirectory
-
--- | This creates a redo target for a file.
 -- This returns 'RedoTarget' created with a relative path for the file.
 redoTargetFromDir :: FilePath    -- ^ the base directory, this should be an absolute path.
                   -> FilePath    -- ^ the file path
@@ -114,6 +116,67 @@ redoTargetFromDir baseDir target =
     then target'
     else makeRelative' baseDir target'
   where target' = normalise' target
+
+withRedo :: C.RedoSettings -> IO () -> IO ()
+withRedo settings = bracket_ (C.initialize settings) C.finalize
+
+-- |
+-- This may throw:
+-- * 'CyclicDependency' if a dependency cycle is detected.
+-- * 'TargetNotGenerated' if the target is not generated even after performing redo.
+-- * 'NoDoFileExist' if the target file does not exists and neither do the proper do-scripts.
+-- * 'DoExitFailure' if any do-script exited with failure.
+-- * 'InvalidDependency' if dependency information is recorded incorrectly.
+-- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
+redo :: [FilePath] -> IO ()
+redo fs = do
+  dir <- getCurrentDirectory
+  -- Redo targets are created from the arguments.
+  let targets = map (redoTargetFromDir dir) fs
+  go C.parallelBuild targets
+ where
+   go _ [] = return ()
+   go 1 targets = do
+     sigs <- C.withoutProcessorToken $ mapM redo' targets
+     case C.callerDepsPath of
+       (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
+       Nothing -> return ()
+   go _ targets@(t:ts) = bracket
+     -- Targets except the 1st one are handled by sub-threads (using 'async').
+     -- Each thread tries to acquire a target lock and a processor token.
+     (mapM (async . redo') ts)
+     (mapM cancel) $
+     -- The main thread owns its own processor token when it starts.
+     -- Thus, it release the token before invoking 'redo' and waiting for futures.
+     \futures -> C.withoutProcessorToken $ do
+       -- Futures return file signatures of the targets.
+       sigs <- liftA2 (:) (redo' t) (mapM wait futures)
+       -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
+       -- with a file path given via an environment variable.
+       -- The file is used to store the dependency information.
+       case C.callerDepsPath of
+         (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
+         Nothing -> return ()
+
+-- |
+-- This may throw:
+-- * 'CyclicDependency' if a dependency cycle is detected.
+-- * 'TargetNotGenerated' if the target is not generated even after performing redo.
+-- * 'NoDoFileExist' if the target file does not exists and neither do the proper do-scripts.
+-- * 'DoExitFailure' if any do-script exited with failure.
+-- * 'InvalidDependency' if dependency information is recorded incorrectly.
+-- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
+redoIfChange :: [FilePath] -> IO ()
+redoIfChange = redo
+
+redoIfCreate :: [FilePath] -> IO ()
+redoIfCreate fs = do
+  dir <- getCurrentDirectory
+  -- Redo targets are created from the arguments.
+  let targets = map (redoTargetFromDir dir) fs
+  case C.callerDepsPath of
+    (Just depsPath) -> mapM_ (recordDependency depsPath . NonExistingDependency) targets
+    Nothing -> return ()
 
 -- | This performs redo for the target.  This requires a target lock
 -- and a processor token to run.  The order of acquisition is
@@ -127,9 +190,9 @@ redoTargetFromDir baseDir target =
 -- * 'DoExitFailure' if any do-script exited with failure.
 -- * 'InvalidDependency' if dependency information is recorded incorrectly.
 -- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
-redo :: RedoTarget
+redo' :: RedoTarget
      -> IO Signature
-redo target = withTargetLock target . C.withProcessorToken $ do
+redo' target = withTargetLock target . C.withProcessorToken $ do
   let indent = replicate C.callDepth ' '
   C.printInfo $ "redo " ++ indent ++ target
   p <- upToDate $ ExistingDependency target AnySignature

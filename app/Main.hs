@@ -1,12 +1,8 @@
 module Main where
 
 import Development.Redo
-import Development.Redo.Config
-import Development.Redo.Future
-import Development.Redo.Util
 
 import Control.Applicative
--- import Control.Concurrent.Async
 import Control.Exception
 import Control.Monad
 import SimpleGetOpt
@@ -48,12 +44,9 @@ main :: IO ()
 main = do
   settings <- getOpts options
   when (help settings) $ dumpUsage options >> exitSuccess
-  bracket_ (initialize settings) finalize $ do
-    dir <- getCurrentDirectory
-    -- Redo targets are created from the arguments.
-    let targets = map (redoTargetFromDir dir) (files settings)
-    catch (main' settings targets) $ \e -> case e of
-      (NoDoFileExist t) -> die $ "no rule to make " ++ quote t
+  withRedo settings $ do
+    catch (main' $ files settings) $ \e -> case e of
+      (NoDoFileExist t) -> die $ "no rule to make " ++ t
       (DoExitFailure t d err) -> die $ d ++ " for " ++ t ++ " failed with exitcode " ++ show err
       (CyclicDependency f) -> die $ "cyclic dependency detected for " ++ f
       (TargetNotGenerated t d) -> die $ d ++ " didn't generate " ++ t
@@ -61,36 +54,11 @@ main = do
       (UnknownRedoCommand cmd) -> die $ "unknown command: " ++ cmd
   where
     die s = printError s >> exitFailure
-    main' settings targets = do
+    main' targets = do
       cmd <- getProgName
       case cmd of
-        "redo" -> parRedo parallelBuild targets
-        "redo-ifchange" -> parRedo parallelBuild targets
-        "redo-ifcreate" ->
-          -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
-          -- with a file path given via an environment variable.
-          -- The file is used to store the dependency information.
-          case callerDepsPath of
-            (Just depsPath) -> mapM_ (recordDependency depsPath . NonExistingDependency) targets
-            Nothing -> return ()
+        "redo" -> redo targets
+        "redo-ifchange" -> redoIfChange targets
+        "redo-ifcreate" -> redoIfCreate targets
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"
-    parRedo _ [] = return ()
-    parRedo 1 targets = do
-      sigs <- withoutProcessorToken $ mapM redo targets
-      case callerDepsPath of
-        (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
-        Nothing -> return ()
-    parRedo _ targets@(t:ts) = bracket
-      -- Targets except the 1st one are handled by sub-threads (using 'async').
-      -- Each thread tries to acquire a target lock and a processor token.
-      (mapM (async . redo) ts)
-      (mapM cancel) $
-      -- The main thread owns its own processor token when it starts.
-      -- Thus, it release the token before invoking 'redo' and waiting for futures.
-      \futures -> withoutProcessorToken $ do
-        -- Futures return file signatures of the targets.
-        sigs <- liftA2 (:) (redo t) (mapM wait futures)
-        case callerDepsPath of
-            (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
-            Nothing -> return ()
