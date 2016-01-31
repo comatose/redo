@@ -5,11 +5,13 @@ module Development.Redo.Config (callDepth,
                                 envCallDepth,
                                 envDependencyPath,
                                 envDebugMode,
+                                envParallelBuild,
                                 envSessionID,
                                 envShellOptions,
                                 envTargetHistory,
                                 finalize,
                                 initialize,
+                                parallelBuild,
                                 printDebug,
                                 printError,
                                 printInfo,
@@ -72,6 +74,9 @@ envDebugMode = "REDO_DEBUG_MODE"
 
 envTargetHistory :: String
 envTargetHistory = "REDO_TARGET_HISTORY"
+
+envParallelBuild :: String
+envParallelBuild = "REDO_PARALLEL_BUILD"
 
 semaphorePrefix :: String
 semaphorePrefix = "/redo_sem_"
@@ -142,6 +147,10 @@ debugMode :: Bool
 {-# NOINLINE debugMode #-}
 debugMode = read . unsafePerformIO $ getEnv envDebugMode
 
+parallelBuild :: Int
+{-# NOINLINE parallelBuild #-}
+parallelBuild = read . unsafePerformIO $ getEnv envParallelBuild
+
 -- | Redo is a recursive procedure.  This returns the call depth.
 callDepth :: Int
 {-# NOINLINE callDepth #-}
@@ -190,6 +199,7 @@ initialize settings = when (callDepth == 0) $ do
   setEnv envSessionID sessionID
   setEnv envShellOptions $ shellOpts settings
   setEnv envDebugMode . show $ debug settings
+  setEnv envParallelBuild . show $ inPar settings
   createGlobalLock
   createProcessorTokens (inPar settings - 1)
 

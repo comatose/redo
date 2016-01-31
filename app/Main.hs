@@ -6,6 +6,7 @@ import Development.Redo.Future
 import Development.Redo.Util
 
 import Control.Applicative
+-- import Control.Concurrent.Async
 import Control.Exception
 import Control.Monad
 import SimpleGetOpt
@@ -63,8 +64,8 @@ main = do
     main' settings targets = do
       cmd <- getProgName
       case cmd of
-        "redo" -> parRedo (inPar settings) targets
-        "redo-ifchange" -> parRedo (inPar settings) targets
+        "redo" -> parRedo parallelBuild targets
+        "redo-ifchange" -> parRedo parallelBuild targets
         "redo-ifcreate" ->
           -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
           -- with a file path given via an environment variable.
@@ -74,6 +75,7 @@ main = do
             Nothing -> return ()
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"
+    parRedo _ [] = return ()
     parRedo 1 targets = do
       sigs <- withoutProcessorToken $ mapM redo targets
       case callerDepsPath of
@@ -92,4 +94,3 @@ main = do
         case callerDepsPath of
             (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
             Nothing -> return ()
-    parRedo _ _ = return ()

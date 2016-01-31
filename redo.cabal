@@ -22,6 +22,7 @@ library
                        Development.Redo.Future
                        Development.Redo.Util
   build-depends:       ansi-terminal,
+                       async,
                        base >= 4.7 && < 5,
                        bytestring,
                        directory,
@@ -38,6 +39,7 @@ executable redo
   main-is:             Main.hs
   ghc-options:         -Wall -threaded -rtsopts -with-rtsopts=-N
   build-depends:       ansi-terminal,
+                       async,
                        base,
                        bytestring,
                        containers >= 0.5,
@@ -55,6 +57,7 @@ test-suite redo-test
   hs-source-dirs:      test
   main-is:             Spec.hs
   build-depends:       ansi-terminal,
+                       async,
                        base,
                        bytestring,
                        containers >= 0.5,

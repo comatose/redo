@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 OUT_PATH=$(dirname $2)
-DEPS=${OUT_PATH}/test0
-for i in $(seq 1 10); do
+DEPS=
+for i in $(seq 1 5); do
     DEPS="${DEPS} ${OUT_PATH}/test-sub${i}.a"
 done
 ./redo-ifchange ${DEPS}

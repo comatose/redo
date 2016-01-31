@@ -242,6 +242,7 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
                       (C.envShellOptions, C.shellOptions),
                       (C.envSessionID, C.sessionID),
                       (C.envDebugMode, show C.debugMode),
+                      (C.envParallelBuild, show C.parallelBuild),
                       (C.envTargetHistory, show (target : C.targetHistory))]}
      return h
    getExecutor dofile = do
