@@ -161,9 +161,9 @@ redo fs = do
    parAsync [] = return []
    parAsync (t:ts) = do
      f <- async $ redo' t
-     catch ((f:) <$> parAsync ts) $ \(_ :: SomeException) -> do
+     catch ((f:) <$> parAsync ts) $ \(e :: SomeException) -> do
        cancel f
-       return []
+       throwIO e
 
 -- |
 -- This may throw:

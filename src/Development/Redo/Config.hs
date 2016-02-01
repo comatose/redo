@@ -185,12 +185,13 @@ semaphore :: Semaphore
 semaphore = unsafePerformIO $ semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
 
 withProcessorToken :: IO a -> IO a
-withProcessorToken action = handle (\(_ :: SomeException) -> exitFailure) $
-  bracket_ (semWait semaphore) (semPost semaphore) action
+withProcessorToken = bracket_ (exitOnException $ semWait semaphore) (ignoreExceptionM_ $ semPost semaphore)
 
 withoutProcessorToken :: IO a -> IO a
-withoutProcessorToken action = handle (\(_ :: SomeException) -> exitFailure) $
-  bracket_ (semPost semaphore) (semWait semaphore) action
+withoutProcessorToken = bracket_ (exitOnException $ semPost semaphore) (ignoreExceptionM_ $ semWait semaphore)
+
+exitOnException :: IO a -> IO a
+exitOnException = handle (\(_ :: SomeException) -> exitFailure)
 
 -- printProcessorTokens :: Semaphore -> IO ()
 -- printProcessorTokens sem = do
