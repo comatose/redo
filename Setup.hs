@@ -23,7 +23,7 @@ main = defaultMainWithHooks simpleUserHooks {
 #if defined(mingw32_HOST_OS) || defined(__MINGW32__)
          copyFile "redo.exe" (dir </> "redo-ifchange.exe")
 #else
-         let symlinks = map (dir </>) ["redo-ifchange", "redo-ifcreate"]
+         let symlinks = map (dir </>) ["redo-ifchange", "redo-ifcreate", "relay-redo"]
          forM_ symlinks $ \symlink -> do
            exists <- doesFileExist symlink
            when exists $ removeFile symlink

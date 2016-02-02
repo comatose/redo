@@ -5,6 +5,7 @@ module Development.Redo (redo,
                          redoIfChange,
                          redoIfCreate,
                          RedoException(..),
+                         relayRedo,
                          withRedo,
                          C.callDepth,
                          C.finalize,
@@ -17,12 +18,10 @@ module Development.Redo (redo,
                         ) where
 
 import qualified Development.Redo.Config as C
-import Development.Redo.Future
 import Development.Redo.Util
 
 import Control.Arrow
 import Control.Applicative
--- import Control.Concurrent.Async
 import Control.Exception
 import Control.Monad
 import qualified Data.ByteString.Lazy as BL
@@ -85,7 +84,10 @@ withTargetLock target io = do
   -- Use a named semaphore to provide a lock for the target.
   sem <- semOpen (C.targetLockPrefix ++ C.sessionID ++ encodePath target)
     (OpenSemFlags True False) (CMode 448) 1
-  bracket_ (semThreadWait sem) (semPost sem) io
+  bracket_ (acquireTargetLock sem) (semPost sem) io
+ where acquireTargetLock sem = do
+         p <- semTryWait sem
+         unless p . C.withoutProcessorToken $ semWait sem
 
 -- | This returns a temporary file path for the output target.  This
 -- does not create the file, but involves creating directories for it.
@@ -133,37 +135,33 @@ redo fs = do
   dir <- getCurrentDirectory
   -- Redo targets are created from the arguments.
   let targets = map (redoTargetFromDir dir) fs
-  go C.parallelBuild targets
- where
-   go _ [] = return ()
-   go 1 targets = do
-     sigs <- C.withoutProcessorToken $ mapM redo' targets
-     case C.callerDepsPath of
-       (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
-       Nothing -> return ()
-   go _ targets@(t:ts) = bracket
-     -- Targets except the 1st one are handled by sub-threads (using 'async').
-     -- Each thread tries to acquire a target lock and a processor token.
-     -- (mapM (async . redo') ts)
-     (parAsync ts)
-     (mapM cancel) $
-     -- The main thread owns its own processor token when it starts.
-     -- Thus, it release the token before invoking 'redo' and waiting for futures.
-     \futures -> C.withoutProcessorToken $ do
-       -- Futures return file signatures of the targets.
-       sigs <- liftA2 (:) (redo' t) (mapM wait futures)
-       -- `redo-ifchange` and `redo-ifcreate` are spawned from another `redo` process
-       -- with a file path given via an environment variable.
-       -- The file is used to store the dependency information.
-       case C.callerDepsPath of
-         (Just depsPath) -> zipWithM_ (\f -> recordDependency depsPath . ExistingDependency f) targets sigs
+  C.withoutProcessorToken $ bracket (parRedo targets)
+    (mapM waitForProcess >=> collectResult targets) (const $ return ())
+ where parRedo (t:ts) = do
+         p <- spawnRedo t
+         handle (\(e::SomeException) -> waitForProcess p >> throwIO e) $ do
+           ps <- parRedo ts
+           return $ p:ps
+       parRedo _ = return []
+
+       spawnRedo target = do
+         oldEnv <- getEnvironment
+         C.acquireProcessorToken
+         handle (\(e::SomeException) -> C.releaseProcessorToken >> throwIO e) $ do
+           (_, _, _, h) <- createProcess $ (proc "relay-redo" [target])
+             {env = Just $ oldEnv ++ [(C.envCallDepth, show (C.callDepth + 1)),
+                                      (C.envShellOptions, C.shellOptions),
+                                      (C.envSessionID, C.sessionID),
+                                      (C.envDebugMode, show C.debugMode),
+                                      (C.envParallelBuild, show C.parallelBuild),
+                                      (C.envTargetHistory, show C.targetHistory)]}
+           return h
+
+       collectResult targets [] = case C.callerDepsPath of
+         (Just depsPath) -> mapM_ (\f -> fileSignature f >>= recordDependency depsPath . ExistingDependency f) targets
          Nothing -> return ()
-   parAsync [] = return []
-   parAsync (t:ts) = do
-     f <- async $ redo' t
-     catch ((f:) <$> parAsync ts) $ \(e :: SomeException) -> do
-       cancel f
-       throwIO e
+       collectResult targets (ExitSuccess:rest) = collectResult targets rest
+       collectResult _ (ExitFailure n : _) = throwIO $ DoExitFailure "" "" n
 
 -- |
 -- This may throw:
@@ -197,16 +195,16 @@ redoIfCreate fs = do
 -- * 'DoExitFailure' if any do-script exited with failure.
 -- * 'InvalidDependency' if dependency information is recorded incorrectly.
 -- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
-redo' :: RedoTarget
-     -> IO Signature
-redo' target = withTargetLock target . C.withProcessorToken $ do
-  let indent = replicate C.callDepth ' '
-  C.printInfo $ "redo " ++ indent ++ target
-  p <- upToDate $ ExistingDependency target AnySignature
-  if p
-    then C.printInfo $ target ++ " is up to date."
-    else runDo target
-  fileSignature target
+relayRedo :: RedoTarget
+          -> IO ()
+relayRedo target = finally go C.releaseProcessorToken
+ where go = withTargetLock target $ do
+         let indent = replicate C.callDepth ' '
+         C.printInfo $ "redo" ++ indent ++ target
+         p <- upToDate $ ExistingDependency target AnySignature
+         if p
+           then C.printInfo $ target ++ " is up to date."
+           else runDo target
 
 -- | This recursively visits its dependencies to test whether it is up to date.
 --
@@ -262,20 +260,16 @@ runDo target = do
   when (null doFiles) $ throwIO . NoDoFileExist $ target
 
   -- Create a temporary file to store dependencies.
-  tmpDeps <- createTempFile C.tempDirPath . takeFileName $ target ++ ".deps"
-  -- Create a temporary output file.
-  tmpOut <- tempOutFilePath target
-
-  catch
-    (executeDo target tmpDeps tmpOut (head doFiles)) $
-    \(e :: SomeException) -> do
-      ignoreExceptionM_ (removeFile tmpOut)
-      ignoreExceptionM_ (removeFile tmpDeps)
-      throwIO e
-
-  -- Rename temporary files to actual names.
-  moveFile tmpOut target
-  moveFile tmpDeps (depFilePath target)
+  bracketOnError (createTempFile C.tempDirPath . takeFileName $ target ++ ".deps")
+    (ignoreExceptionM_ . removeFile) $
+    \tmpDeps ->
+      -- Create a temporary output file.
+      bracketOnError (tempOutFilePath target) (ignoreExceptionM_ . removeFile) $
+        \tmpOut -> do
+          executeDo target tmpDeps tmpOut (head doFiles)
+          -- Rename temporary files to actual names.
+          moveFile tmpOut target
+          moveFile tmpDeps (depFilePath target)
 
 -- | This executes the do file.
 --
@@ -308,12 +302,7 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
      oldEnv <- getEnvironment
      (_, _, _, h) <- createProcess $ (shell . unwords $ exe : args)
        {env = Just $ oldEnv ++ [(C.envDependencyPath, tmpDeps),
-                      (C.envCallDepth, show (C.callDepth + 1)),
-                      (C.envShellOptions, C.shellOptions),
-                      (C.envSessionID, C.sessionID),
-                      (C.envDebugMode, show C.debugMode),
-                      (C.envParallelBuild, show C.parallelBuild),
-                      (C.envTargetHistory, show (target : C.targetHistory))]}
+                                (C.envTargetHistory, show (target : C.targetHistory))]}
      return h
    getExecutor dofile = do
      exe <- ignoreExceptionM "sh" $ do

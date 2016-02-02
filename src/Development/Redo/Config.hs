@@ -1,6 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Development.Redo.Config (callDepth,
+module Development.Redo.Config (acquireProcessorToken,
+                                callDepth,
                                 callerDepsPath,
                                 debugMode,
                                 depsDirPath,
@@ -19,6 +20,7 @@ module Development.Redo.Config (callDepth,
                                 printInfo,
                                 printSuccess,
                                 RedoSettings(..),
+                                releaseProcessorToken,
                                 sessionID,
                                 shellOptions,
                                 targetHistory,
@@ -36,7 +38,6 @@ import Control.Exception
 import Control.Monad
 import System.Console.ANSI
 import System.Environment
-import System.Exit
 import System.FilePath
 import System.IO
 import System.IO.Unsafe
@@ -116,7 +117,7 @@ destroyGlobalLock :: IO ()
 destroyGlobalLock = semUnlink $ globalLockPrefix ++ sessionID
 
 withGlobalLock :: IO a -> IO a
-withGlobalLock = bracket_ (semThreadWait globalLock) (semPost globalLock)
+withGlobalLock = bracket_ (semWait globalLock) (semPost globalLock)
 
 printWithColor :: [SGR] -> String -> IO ()
 printWithColor color s = ignoreExceptionM_ . withGlobalLock $ bracket_
@@ -184,19 +185,25 @@ semaphore :: Semaphore
 {-# NOINLINE semaphore #-}
 semaphore = unsafePerformIO $ semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
 
+acquireProcessorToken :: IO ()
+acquireProcessorToken = semWait semaphore >> printProcessorTokens semaphore
+
+releaseProcessorToken :: IO ()
+releaseProcessorToken = semPost semaphore >> printProcessorTokens semaphore
+
 withProcessorToken :: IO a -> IO a
-withProcessorToken = bracket_ (exitOnException $ semWait semaphore) (ignoreExceptionM_ $ semPost semaphore)
+withProcessorToken = bracket_ acquireProcessorToken releaseProcessorToken
 
 withoutProcessorToken :: IO a -> IO a
-withoutProcessorToken = bracket_ (exitOnException $ semPost semaphore) (ignoreExceptionM_ $ semWait semaphore)
+withoutProcessorToken = bracket_ releaseProcessorToken acquireProcessorToken
 
-exitOnException :: IO a -> IO a
-exitOnException = handle (\(_ :: SomeException) -> exitFailure)
+-- exitOnException :: IO a -> IO a
+-- exitOnException = handle (\(_ :: SomeException) -> exitFailure)
 
--- printProcessorTokens :: Semaphore -> IO ()
--- printProcessorTokens sem = do
---   n <- semGetValue sem
---   printDebug $ "Semaphores = " ++ show n
+printProcessorTokens :: Semaphore -> IO ()
+printProcessorTokens sem = do
+  n <- semGetValue sem
+  printDebug $ "Semaphores = " ++ show n
 
 initialize :: RedoSettings -> IO ()
 initialize settings = when (callDepth == 0) $ do

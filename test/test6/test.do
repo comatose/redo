@@ -1,4 +1,8 @@
 #!/usr/bin/env sh
 OUT_PATH=$(dirname $2)
-redo-ifchange ${OUT_PATH}/test-sub1.a ${OUT_PATH}/test-sub2.a ${OUT_PATH}/test-sub3.a ${OUT_PATH}/test-sub4.a ${OUT_PATH}/test-sub5.a ${OUT_PATH}/test-sub6.a ${OUT_PATH}/test-sub7.a ${OUT_PATH}/test-sub8.a ${OUT_PATH}/test-sub9.a ${OUT_PATH}/test-sub10.a
+DEPS=
+for i in $(seq 1 15); do
+    DEPS="${DEPS} ${OUT_PATH}/test-sub${i}.a"
+done
+redo-ifchange ${DEPS}
 echo $0 $1 $2 > $3

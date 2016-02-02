@@ -2,11 +2,9 @@ module Main where
 
 import Development.Redo
 
-import Control.Applicative
 import Control.Exception
 import Control.Monad
 import SimpleGetOpt
-import System.Directory
 import System.Environment
 import System.Exit
 import Text.Read
@@ -44,9 +42,10 @@ main :: IO ()
 main = do
   settings <- getOpts options
   when (help settings) $ dumpUsage options >> exitSuccess
-  withRedo settings $ do
-    catch (main' $ files settings) $ \e -> case e of
+  withRedo settings . catch (main' $ files settings) $
+    \e -> case e of
       (NoDoFileExist t) -> die $ "no rule to make " ++ t
+      (DoExitFailure "" "" _) -> exitFailure
       (DoExitFailure t d err) -> die $ d ++ " for " ++ t ++ " failed with exitcode " ++ show err
       (CyclicDependency f) -> die $ "cyclic dependency detected for " ++ f
       (TargetNotGenerated t d) -> die $ d ++ " didn't generate " ++ t
@@ -56,9 +55,10 @@ main = do
     die s = printError s >> exitFailure
     main' targets = do
       cmd <- getProgName
-      case cmd of
-        "redo" -> redo targets
-        "redo-ifchange" -> redoIfChange targets
-        "redo-ifcreate" -> redoIfCreate targets
+      case (cmd, targets) of
+        ("redo", _) -> redo targets
+        ("redo-ifchange", _) -> redoIfChange targets
+        ("redo-ifcreate", _) -> redoIfCreate targets
+        ("relay-redo", [target]) -> relayRedo target
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"
