@@ -187,10 +187,10 @@ relayRedo :: RedoTarget
           -> IO ()
 relayRedo target = withTargetLock target $ do
   let indent = replicate C.callDepth ' '
-  C.printInfo $ "redo" ++ indent ++ target
+  C.printDebug $ "visit " ++ indent ++ target
   p <- upToDate $ ExistingDependency target AnySignature
   if p
-    then C.printInfo $ target ++ " is up to date."
+    then C.printDebug $ target ++ " is up to date."
     else runDo target
 
 -- | This recursively visits its dependencies to test whether it is up to date.
@@ -243,6 +243,9 @@ getDependencies target = ignoreExceptionM Nothing $
 runDo :: RedoTarget
       -> IO ()
 runDo target = do
+  let indent = replicate C.callDepth ' '
+  C.printInfo $ "redo " ++ indent ++ target
+
   doFiles <- filterM (doesFileExist . snd) (listDoFiles target)
   when (null doFiles) $ throwIO . NoDoFileExist $ target
 
