@@ -140,8 +140,8 @@ redo fs = do
     mask_ $ mapM waitForProcess ps >>= collectResult targets
  where parRedo (t:ts) = do
          C.acquireProcessorToken
-         p <- spawnProcess "relay-redo" [t] `catch` (\(e::SomeException) -> C.releaseProcessorToken >> throwIO e)
-         ps <- parRedo ts `catch` (\(e::SomeException) -> waitForProcess p >> throwIO e)
+         p <- spawnProcess "relay-redo" [t] `onException` C.releaseProcessorToken
+         ps <- parRedo ts `onException` waitForProcess p
          return (p:ps)
        parRedo _ = return []
 
