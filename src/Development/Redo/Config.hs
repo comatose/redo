@@ -31,8 +31,6 @@ module Development.Redo.Config (acquireProcessorToken,
                                 withProcessorToken,
                                ) where
 
-import Development.Redo.Util
-
 import Control.Applicative
 import Control.Exception
 import Control.Monad
@@ -120,7 +118,7 @@ withGlobalLock :: IO a -> IO a
 withGlobalLock = bracket_ (semWait globalLock) (semPost globalLock)
 
 printWithColor :: [SGR] -> String -> IO ()
-printWithColor color s = ignoreExceptionM_ . withGlobalLock $ bracket_
+printWithColor color s = withGlobalLock $ bracket_
   (hSetSGR stderr color) (hSetSGR stderr [Reset]) (hPutStrLn stderr s)
 
 printInfo :: String -> IO ()
@@ -158,18 +156,16 @@ parallelBuild = read . unsafePerformIO $ getEnv envParallelBuild
 -- | Redo is a recursive procedure.  This returns the call depth.
 callDepth :: Int
 {-# NOINLINE callDepth #-}
-callDepth = unsafePerformIO $ ignoreExceptionM 0 (read <$> getEnv envCallDepth)
+callDepth = unsafePerformIO $ maybe 0 read <$> lookupEnv envCallDepth
 
 targetHistory :: [String]
 {-# NOINLINE targetHistory #-}
--- targetHistory = unsafePerformIO $ read <$> getEnv envTargetHistory
-targetHistory = unsafePerformIO $ ignoreExceptionM [] (read <$> getEnv envTargetHistory)
+targetHistory = unsafePerformIO $ maybe [] read <$> lookupEnv envTargetHistory
 
 createProcessorTokens :: Int -> IO ()
 createProcessorTokens n = do
-  let sid = semaphorePrefix ++ sessionID
-  _ <- semOpen sid (OpenSemFlags True True) (CMode 448) n
-  printDebug $ "Semaphore '" ++ sid ++ "' with " ++ show n ++ " sems created."
+  _ <- semOpen semaphoreID (OpenSemFlags True True) (CMode 448) n
+  printDebug $ "Semaphore '" ++ semaphoreID ++ "' with " ++ show n ++ " sems created."
 
 destroyProcessorTokens :: IO ()
 destroyProcessorTokens = do
@@ -186,10 +182,12 @@ semaphore :: Semaphore
 semaphore = unsafePerformIO $ semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
 
 acquireProcessorToken :: IO ()
-acquireProcessorToken = semWait semaphore >> printProcessorTokens semaphore
+acquireProcessorToken = bracketOnError (semWait semaphore) (const $ semPost semaphore)
+  (const $ printProcessorTokens semaphore)
 
 releaseProcessorToken :: IO ()
-releaseProcessorToken = semPost semaphore >> printProcessorTokens semaphore
+releaseProcessorToken = bracketOnError (semPost semaphore) (const $ semWait semaphore)
+  (const $ printProcessorTokens semaphore)
 
 withProcessorToken :: IO a -> IO a
 withProcessorToken = bracket_ acquireProcessorToken releaseProcessorToken

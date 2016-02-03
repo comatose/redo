@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+
 module Development.Redo.Util (createFile,
                               createTempFile,
                               decodePath,
