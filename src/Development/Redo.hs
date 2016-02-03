@@ -140,21 +140,10 @@ redo fs = do
     mask_ $ mapM waitForProcess ps >>= collectResult targets
  where parRedo (t:ts) = do
          C.acquireProcessorToken
-         p <- spawnRedo t `catch` (\(e::SomeException) -> C.releaseProcessorToken >> throwIO e)
+         p <- spawnProcess "relay-redo" [t] `catch` (\(e::SomeException) -> C.releaseProcessorToken >> throwIO e)
          ps <- parRedo ts `catch` (\(e::SomeException) -> waitForProcess p >> throwIO e)
          return (p:ps)
        parRedo _ = return []
-
-       spawnRedo target = do
-         oldEnv <- getEnvironment
-         (_, _, _, h) <- createProcess $ (proc "relay-redo" [target])
-           {env = Just $ oldEnv ++ [(C.envCallDepth, show (C.callDepth + 1)),
-                                    (C.envShellOptions, C.shellOptions),
-                                    (C.envSessionID, C.sessionID),
-                                    (C.envDebugMode, show C.debugMode),
-                                    (C.envParallelBuild, show C.parallelBuild),
-                                    (C.envTargetHistory, show C.targetHistory)]}
-         return h
 
        collectResult targets [] = case C.callerDepsPath of
          (Just depsPath) -> mapM_ (\f -> fileSignature f >>= recordDependency depsPath . ExistingDependency f) targets
@@ -299,9 +288,13 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
      C.printDebug . unwords $ exe : args
      oldEnv <- getEnvironment
      (_, _, _, h) <- createProcess $ (shell . unwords $ exe : args)
-       {env = Just $ oldEnv ++ [(C.envDependencyPath, tmpDeps),
-                                (C.envTargetHistory, show (target : C.targetHistory))],
-        delegate_ctlc = False}
+       {env = Just $ oldEnv ++ [(C.envCallDepth, show (C.callDepth + 1)),
+                                (C.envShellOptions, C.shellOptions),
+                                (C.envSessionID, C.sessionID),
+                                (C.envDebugMode, show C.debugMode),
+                                (C.envParallelBuild, show C.parallelBuild),
+                                (C.envDependencyPath, tmpDeps),
+                                (C.envTargetHistory, show (target : C.targetHistory))]}
      return h
    getExecutor dofile = do
      exe <- ignoreExceptionM "sh" $ do
