@@ -55,10 +55,9 @@ main = do
     die s = printError s >> exitFailure
     main' targets = do
       cmd <- getProgName
-      case (cmd, targets) of
-        ("redo", _) -> redo targets
-        ("redo-ifchange", _) -> redoIfChange targets
-        ("redo-ifcreate", _) -> redoIfCreate targets
-        ("relay-redo", [target]) -> relayRedo target
+      case cmd of
+        "redo" -> redo targets
+        "redo-ifchange" -> redoIfChange targets
+        "redo-ifcreate" -> redoIfCreate targets
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"

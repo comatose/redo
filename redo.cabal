@@ -32,23 +32,23 @@ library
   default-language:    Haskell2010
   default-extensions:  ScopedTypeVariables,
                        DeriveDataTypeable
-  ghc-options:         -Wall
+  ghc-options:         -Wall -O2
 
 executable redo
   hs-source-dirs:      app
-  main-is:             Main.hs
-  ghc-options:         -Wall
-  build-depends:       ansi-terminal,
-                       base,
-                       bytestring,
-                       containers >= 0.5,
-                       directory,
-                       filepath,
-                       process,
-                       pureMD5,
+  main-is:             Redo.hs
+  ghc-options:         -Wall -O2
+  build-depends:       base,
                        redo,
-                       simple-get-opt,
-                       unix
+                       simple-get-opt
+  default-language:    Haskell2010
+
+executable relay-redo
+  hs-source-dirs:      app
+  main-is:             RelayRedo.hs
+  ghc-options:         -Wall -O2
+  build-depends:       base,
+                       redo
   default-language:    Haskell2010
 
 test-suite redo-test

@@ -135,27 +135,26 @@ redo fs = do
   dir <- getCurrentDirectory
   -- Redo targets are created from the arguments.
   let targets = map (redoTargetFromDir dir) fs
-  C.withoutProcessorToken $ bracket (parRedo targets)
-    (mapM waitForProcess >=> collectResult targets) (const $ return ())
+  C.withoutProcessorToken $ do
+    ps <- parRedo targets
+    mask_ $ mapM waitForProcess ps >>= collectResult targets
  where parRedo (t:ts) = do
-         p <- spawnRedo t
-         handle (\(e::SomeException) -> waitForProcess p >> throwIO e) $ do
-           ps <- parRedo ts
-           return $ p:ps
+         C.acquireProcessorToken
+         p <- spawnRedo t `catch` (\(e::SomeException) -> C.releaseProcessorToken >> throwIO e)
+         ps <- parRedo ts `catch` (\(e::SomeException) -> waitForProcess p >> throwIO e)
+         return (p:ps)
        parRedo _ = return []
 
        spawnRedo target = do
          oldEnv <- getEnvironment
-         C.acquireProcessorToken
-         handle (\(e::SomeException) -> C.releaseProcessorToken >> throwIO e) $ do
-           (_, _, _, h) <- createProcess $ (proc "relay-redo" [target])
-             {env = Just $ oldEnv ++ [(C.envCallDepth, show (C.callDepth + 1)),
-                                      (C.envShellOptions, C.shellOptions),
-                                      (C.envSessionID, C.sessionID),
-                                      (C.envDebugMode, show C.debugMode),
-                                      (C.envParallelBuild, show C.parallelBuild),
-                                      (C.envTargetHistory, show C.targetHistory)]}
-           return h
+         (_, _, _, h) <- createProcess $ (proc "relay-redo" [target])
+           {env = Just $ oldEnv ++ [(C.envCallDepth, show (C.callDepth + 1)),
+                                    (C.envShellOptions, C.shellOptions),
+                                    (C.envSessionID, C.sessionID),
+                                    (C.envDebugMode, show C.debugMode),
+                                    (C.envParallelBuild, show C.parallelBuild),
+                                    (C.envTargetHistory, show C.targetHistory)]}
+         return h
 
        collectResult targets [] = case C.callerDepsPath of
          (Just depsPath) -> mapM_ (\f -> fileSignature f >>= recordDependency depsPath . ExistingDependency f) targets
@@ -197,14 +196,13 @@ redoIfCreate fs = do
 -- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
 relayRedo :: RedoTarget
           -> IO ()
-relayRedo target = finally go C.releaseProcessorToken
- where go = withTargetLock target $ do
-         let indent = replicate C.callDepth ' '
-         C.printInfo $ "redo" ++ indent ++ target
-         p <- upToDate $ ExistingDependency target AnySignature
-         if p
-           then C.printInfo $ target ++ " is up to date."
-           else runDo target
+relayRedo target = withTargetLock target $ do
+  let indent = replicate C.callDepth ' '
+  C.printInfo $ "redo" ++ indent ++ target
+  p <- upToDate $ ExistingDependency target AnySignature
+  if p
+    then C.printInfo $ target ++ " is up to date."
+    else runDo target
 
 -- | This recursively visits its dependencies to test whether it is up to date.
 --
@@ -302,7 +300,8 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
      oldEnv <- getEnvironment
      (_, _, _, h) <- createProcess $ (shell . unwords $ exe : args)
        {env = Just $ oldEnv ++ [(C.envDependencyPath, tmpDeps),
-                                (C.envTargetHistory, show (target : C.targetHistory))]}
+                                (C.envTargetHistory, show (target : C.targetHistory))],
+        delegate_ctlc = False}
      return h
    getExecutor dofile = do
      exe <- ignoreExceptionM "sh" $ do
