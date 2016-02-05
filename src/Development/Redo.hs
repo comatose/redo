@@ -18,6 +18,7 @@ module Development.Redo (redo,
                         ) where
 
 import qualified Development.Redo.Config as C
+import Development.Redo.Future
 import Development.Redo.Util
 
 import Control.Arrow
@@ -157,20 +158,20 @@ redo fs = do
            restore (parRedo' (p:ps) ts) `onException` stopChild p
        parRedo' ps _ = return $ reverse ps
 
-       spawnChild t = spawnProcess "relay-redo" [t]
-       joinChild = waitForProcess
-       stopChild = waitForProcess
+       spawnChild t = asyncOS (relayRedo t `finally` C.releaseProcessorToken)
+       joinChild = waitEither
+       stopChild = wait
        checkInterrupted p = do
-         r <- getProcessExitCode p
+         r <- tryWaitEither p
          case r of
-           Just (ExitFailure n) -> throwIO $ DoExitFailure "" "" n
+           Just (Left e) -> throwIO e
            _ -> return ()
 
        collectResult targets [] = case C.callerDepsPath of
          (Just depsPath) -> mapM_ (\f -> fileSignature f >>= recordDependency depsPath . ExistingDependency f) targets
          Nothing -> return ()
-       collectResult targets (ExitSuccess:rest) = collectResult targets rest
-       collectResult _ (ExitFailure n : _) = throwIO $ DoExitFailure "" "" n
+       collectResult targets (Right _:rest) = collectResult targets rest
+       collectResult _ (Left (e::SomeException) : _) = throwIO e
 
 -- |
 -- This may throw:
