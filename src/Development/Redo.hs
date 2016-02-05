@@ -138,7 +138,9 @@ redo fs = do
   -- Redo targets are created from the arguments.
   let targets = map (redoTargetFromDir dir) fs
   -- release a process token for sub-processes
-  C.withoutProcessorToken $ do
+  if C.parallelBuild == 1
+    then mapM_ relayRedo targets >> collectResult targets []
+    else C.withoutProcessorToken $
     -- make all interruptible except joining spawned sub-processes.
     mask $ \restore -> do
       ps <- restore $ parRedo targets
