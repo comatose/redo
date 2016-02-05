@@ -122,7 +122,7 @@ redoTargetFromDir baseDir target =
 withRedo :: C.RedoSettings -> IO () -> IO ()
 withRedo settings = bracket_ (C.initialize settings) C.finalize
 
--- |
+-- | This concurrently performs redo for multiple targets.
 -- This may throw:
 -- * 'CyclicDependency' if a dependency cycle is detected.
 -- * 'TargetNotGenerated' if the target is not generated even after performing redo.
@@ -135,15 +135,27 @@ redo fs = do
   dir <- getCurrentDirectory
   -- Redo targets are created from the arguments.
   let targets = map (redoTargetFromDir dir) fs
+  -- release a process token for sub-processes
   C.withoutProcessorToken $ do
     ps <- parRedo targets
-    mask_ $ mapM waitForProcess ps >>= collectResult targets
- where parRedo (t:ts) = do
+    mask_ $ mapM joinChild ps >>= collectResult targets
+ where parRedo = parRedo' []
+       parRedo' (ps) (t:ts) = do
+         -- if redo processes which have started earlier exit with error, stop throwing 'DoExitFailure'.
+         mapM_ checkInterrupted ps
          C.acquireProcessorToken
-         p <- spawnProcess "relay-redo" [t] `onException` C.releaseProcessorToken
-         ps <- parRedo ts `onException` waitForProcess p
-         return (p:ps)
-       parRedo _ = return []
+         p <- spawnChild t `onException` C.releaseProcessorToken
+         parRedo' (p:ps) ts `onException` stopChild p
+       parRedo' ps _ = return $ reverse ps
+
+       spawnChild t = spawnProcess "relay-redo" [t] `onException` C.releaseProcessorToken
+       joinChild = waitForProcess
+       stopChild = waitForProcess
+       checkInterrupted p = do
+         r <- getProcessExitCode p
+         case r of
+           Just (ExitFailure n) -> throwIO $ DoExitFailure "" "" n
+           _ -> return ()
 
        collectResult targets [] = case C.callerDepsPath of
          (Just depsPath) -> mapM_ (\f -> fileSignature f >>= recordDependency depsPath . ExistingDependency f) targets
@@ -171,11 +183,7 @@ redoIfCreate fs = do
     (Just depsPath) -> mapM_ (recordDependency depsPath . NonExistingDependency) targets
     Nothing -> return ()
 
--- | This performs redo for the target.  This requires a target lock
--- and a processor token to run.  The order of acquisition is
--- important to prevent deadlock. (i.e. a target lock first, and then
--- a processor token) This returns the signature of the target.
---
+-- |
 -- This may throw:
 -- * 'CyclicDependency' if a dependency cycle is detected.
 -- * 'TargetNotGenerated' if the target is not generated even after performing redo.
