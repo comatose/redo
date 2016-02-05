@@ -37,7 +37,7 @@ library
 executable redo
   hs-source-dirs:      app
   main-is:             Redo.hs
-  ghc-options:         -Wall -O2
+  ghc-options:         -Wall -O2 -threaded
   build-depends:       base,
                        redo,
                        simple-get-opt
