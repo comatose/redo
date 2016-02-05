@@ -163,14 +163,13 @@ targetHistory :: [String]
 targetHistory = unsafePerformIO $ maybe [] read <$> lookupEnv envTargetHistory
 
 createProcessorTokens :: Int -> IO ()
-createProcessorTokens n = do
+createProcessorTokens n = when (parallelBuild > 1) $ do
   _ <- semOpen semaphoreID (OpenSemFlags True True) (CMode 448) n
   printDebug $ "Semaphore '" ++ semaphoreID ++ "' with " ++ show n ++ " sems created."
 
 destroyProcessorTokens :: IO ()
-destroyProcessorTokens = do
-  sem <- semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
-  n <- semGetValue sem
+destroyProcessorTokens = when (parallelBuild > 1) $ do
+  n <- semGetValue semaphore
   printDebug $ "Semaphore '" ++ semaphoreID ++ "' with " ++ show n ++ " sems destroyed."
   semUnlink semaphoreID
 
@@ -182,18 +181,24 @@ semaphore :: Semaphore
 semaphore = unsafePerformIO $ semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
 
 acquireProcessorToken :: IO ()
-acquireProcessorToken = bracketOnError (semWait semaphore) (const $ semPost semaphore)
+acquireProcessorToken = when (parallelBuild > 1) $
+  bracketOnError (semWait semaphore) (const $ semPost semaphore)
   (const $ printProcessorTokens semaphore)
 
 releaseProcessorToken :: IO ()
-releaseProcessorToken = bracketOnError (semPost semaphore) (const $ semWait semaphore)
+releaseProcessorToken = when (parallelBuild > 1) $
+  bracketOnError (semPost semaphore) (const $ semWait semaphore)
   (const $ printProcessorTokens semaphore)
 
 withProcessorToken :: IO a -> IO a
-withProcessorToken = bracket_ acquireProcessorToken releaseProcessorToken
+withProcessorToken action = if parallelBuild > 1
+                            then bracket_ (semWait semaphore) (semPost semaphore) action
+                            else action
 
 withoutProcessorToken :: IO a -> IO a
-withoutProcessorToken = bracket_ releaseProcessorToken acquireProcessorToken
+withoutProcessorToken action = if parallelBuild > 1
+                               then bracket_ (semPost semaphore) (semWait semaphore) action
+                               else action
 
 -- exitOnException :: IO a -> IO a
 -- exitOnException = handle (\(_ :: SomeException) -> exitFailure)

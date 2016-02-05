@@ -80,14 +80,16 @@ withTargetLock target io = do
   -- 'targetHistory' contains a list of targets which are being
   -- processed by parent processes.
   when (target `elem` C.targetHistory) . throwIO $ CyclicDependency target
-
-  -- Use a named semaphore to provide a lock for the target.
-  sem <- semOpen (C.targetLockPrefix ++ C.sessionID ++ encodePath target)
-    (OpenSemFlags True False) (CMode 448) 1
-  bracket_ (acquireTargetLock sem) (semPost sem) io
- where acquireTargetLock sem = do
+  if C.parallelBuild > 1
+    then bracket acquireTargetLock semPost $ const io
+    else io
+ where acquireTargetLock = do
+         -- Use a named semaphore to provide a lock for the target.
+         sem <- semOpen (C.targetLockPrefix ++ C.sessionID ++ encodePath target)
+           (OpenSemFlags True False) (CMode 448) 1
          p <- semTryWait sem
          unless p . C.withoutProcessorToken $ semWait sem
+         return sem
 
 -- | This returns a temporary file path for the output target.  This
 -- does not create the file, but involves creating directories for it.
