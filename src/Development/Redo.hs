@@ -34,6 +34,7 @@ import System.Environment
 import System.Exit
 import System.FilePath
 import System.IO
+import System.Posix.Files
 import System.Posix.Semaphore
 import System.Posix.Types
 import System.Process
@@ -102,7 +103,7 @@ tempOutFilePath target = do
 fileSignature :: FilePath -> IO Signature
 fileSignature f =
   -- any exception (e.g. file does not exists.) causes NoSignature.
-  ignoreExceptionM NoSignature (Signature . show . MD5.md5 <$> BL.readFile f)
+  ignoreExceptionM NoSignature (Signature . show . modificationTimeHiRes <$> getFileStatus f)
 
 -- | This records a dependency entry in the file.
 recordDependency :: FilePath   -- ^ the file which a dependency will be appended to
