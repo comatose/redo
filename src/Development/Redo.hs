@@ -137,18 +137,23 @@ redo fs = do
   let targets = map (redoTargetFromDir dir) fs
   -- release a process token for sub-processes
   C.withoutProcessorToken $ do
-    ps <- parRedo targets
-    mask_ $ mapM joinChild ps >>= collectResult targets
+    -- make all interruptible except joining spawned sub-processes.
+    mask $ \restore -> do
+      ps <- restore $ parRedo targets
+      rs <- mapM joinChild ps
+      restore $ collectResult targets rs
  where parRedo = parRedo' []
        parRedo' (ps) (t:ts) = do
          -- if redo processes which have started earlier exit with error, stop throwing 'DoExitFailure'.
          mapM_ checkInterrupted ps
-         C.acquireProcessorToken
-         p <- spawnChild t `onException` C.releaseProcessorToken
-         parRedo' (p:ps) ts `onException` stopChild p
+         mask $ \restore -> do
+           C.acquireProcessorToken
+           -- once a child is normaly spawned, it will release the token eventually, see "RelayRedo.hs".
+           p <- restore (spawnChild t) `onException` C.releaseProcessorToken
+           restore (parRedo' (p:ps) ts) `onException` stopChild p
        parRedo' ps _ = return $ reverse ps
 
-       spawnChild t = spawnProcess "relay-redo" [t] `onException` C.releaseProcessorToken
+       spawnChild t = spawnProcess "relay-redo" [t]
        joinChild = waitForProcess
        stopChild = waitForProcess
        checkInterrupted p = do
