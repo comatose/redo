@@ -4,6 +4,7 @@
 module Development.Redo (redo,
                          redoIfChange,
                          redoIfCreate,
+                         redoStamp,
                          RedoException(..),
                          relayRedo,
                          withRedo,
@@ -46,11 +47,13 @@ type RedoTarget = FilePath
 data Signature =
   NoSignature |        -- ^ for non-existing files
   AnySignature |       -- ^ the wild-card signature which matches any signatures
-  Signature String     -- ^ the normal signature containing the MD5 value.
+  MD5Sum String |      -- ^ the normal signature containing the MD5 value.
+  TimeStamp String     -- ^ the normal signature containing the time stamp.
   deriving (Show, Read)
 
 instance Eq Signature where
-  (Signature x) == (Signature y) = x == y
+  (MD5Sum x) == (MD5Sum y) = x == y
+  (TimeStamp x) == (TimeStamp y) = x == y
   NoSignature == _ = False
   _ == NoSignature = False
   _ == _ = True
@@ -100,10 +103,16 @@ tempOutFilePath target = do
   return $ C.tempOutDirPath </> encodePath target
 
 -- | Thes returns the signature of a file.
-fileSignature :: FilePath -> IO Signature
-fileSignature f =
+fileMD5 :: FilePath -> IO Signature
+fileMD5 f =
   -- any exception (e.g. file does not exists.) causes NoSignature.
-  ignoreExceptionM NoSignature (Signature . show . modificationTimeHiRes <$> getFileStatus f)
+  ignoreExceptionM NoSignature (MD5Sum . show . MD5.md5 <$> BL.readFile f)
+
+-- | Thes returns the signature of a file.
+fileStamp :: FilePath -> IO Signature
+fileStamp f =
+  -- any exception (e.g. file does not exists.) causes NoSignature.
+  ignoreExceptionM NoSignature (TimeStamp . show . modificationTimeHiRes <$> getFileStatus f)
 
 -- | This records a dependency entry in the file.
 recordDependency :: FilePath   -- ^ the file which a dependency will be appended to
@@ -133,8 +142,10 @@ withRedo settings = bracket_ (C.initialize settings) C.finalize
 -- * 'DoExitFailure' if any do-script exited with failure.
 -- * 'InvalidDependency' if dependency information is recorded incorrectly.
 -- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
-redo :: [FilePath] -> IO ()
-redo fs = do
+redoGeneric :: (FilePath -> IO Signature)
+            -> [FilePath]
+            -> IO ()
+redoGeneric sigG fs = do
   dir <- getCurrentDirectory
   -- Redo targets are created from the arguments.
   let targets = map (redoTargetFromDir dir) fs
@@ -168,10 +179,13 @@ redo fs = do
            _ -> return ()
 
        collectResult targets [] = case C.callerDepsPath of
-         (Just depsPath) -> mapM_ (\f -> fileSignature f >>= recordDependency depsPath . ExistingDependency f) targets
+         (Just depsPath) -> mapM_ (\f -> sigG f >>= recordDependency depsPath . ExistingDependency f) targets
          Nothing -> return ()
        collectResult targets (ExitSuccess:rest) = collectResult targets rest
        collectResult _ (ExitFailure n : _) = throwIO $ DoExitFailure "" "" n
+
+redo :: [FilePath] -> IO ()
+redo = redoGeneric fileMD5
 
 -- |
 -- This may throw:
@@ -201,6 +215,17 @@ redoIfCreate fs = do
 -- * 'DoExitFailure' if any do-script exited with failure.
 -- * 'InvalidDependency' if dependency information is recorded incorrectly.
 -- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
+redoStamp :: [FilePath] -> IO ()
+redoStamp = redoGeneric fileStamp
+
+-- |
+-- This may throw:
+-- * 'CyclicDependency' if a dependency cycle is detected.
+-- * 'TargetNotGenerated' if the target is not generated even after performing redo.
+-- * 'NoDoFileExist' if the target file does not exists and neither do the proper do-scripts.
+-- * 'DoExitFailure' if any do-script exited with failure.
+-- * 'InvalidDependency' if dependency information is recorded incorrectly.
+-- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
 relayRedo :: RedoTarget
           -> IO ()
 relayRedo target = withTargetLock target $ do
@@ -217,10 +242,12 @@ relayRedo target = withTargetLock target $ do
 -- * 'InvalidDependency' if dependency information is recorded incorrectly.
 upToDate :: Dependency
          -> IO Bool
+upToDate (NonExistingDependency target) = not <$> doesFileExist target
+
 upToDate (ExistingDependency target oldSig) = do
-  newSig <- fileSignature target
+  p <- changed
   -- first, check if the target has been changed.
-  if oldSig /= newSig
+  if p
     then return False
     else do
       maybeDeps <- getDependencies target
@@ -236,7 +263,15 @@ upToDate (ExistingDependency target oldSig) = do
           -- call 'upToData' for exDos as well as recorded dependencies.
           and <$> mapM upToDate (map NonExistingDependency exDos ++ deps)
         _ -> throwIO $ InvalidDependency target
-upToDate (NonExistingDependency target) = not <$> doesFileExist target
+ where changed = do
+         exist <- doesFileExist target
+         if exist
+           then case oldSig of
+             MD5Sum _ -> (oldSig /=) <$> fileMD5 target
+             TimeStamp _ -> (oldSig /=) <$> fileStamp target
+             NoSignature -> return True
+             AnySignature -> return False
+           else return True
 
 -- | This composes a file path to store dependencies.
 depFilePath :: RedoTarget -> FilePath
@@ -295,7 +330,7 @@ executeDo :: RedoTarget
           -> IO ()
 executeDo target tmpDeps tmpOut (baseName, doFile) = do
   -- Add the do file itself as the 1st dependency.
-  doSig <- fileSignature doFile
+  doSig <- fileMD5 doFile
   recordDependency tmpDeps $ ExistingDependency doFile doSig
   ec <- runCmd >>= waitForProcess
   case ec of

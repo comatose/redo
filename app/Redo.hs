@@ -59,5 +59,6 @@ main = do
         "redo" -> redo targets
         "redo-ifchange" -> redoIfChange targets
         "redo-ifcreate" -> redoIfCreate targets
+        "redo-stamp" -> redoStamp targets
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"
