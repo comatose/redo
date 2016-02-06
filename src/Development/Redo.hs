@@ -188,6 +188,9 @@ redoGeneric sigG fs = do
 redo :: [FilePath] -> IO ()
 redo = redoGeneric fileMD5
 
+redo :: [FilePath] -> IO ()
+redo = redoGeneric fileMD5
+
 -- |
 -- This may throw:
 -- * 'CyclicDependency' if a dependency cycle is detected.
