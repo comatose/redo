@@ -176,7 +176,7 @@ redoGeneric sigG fs = do
            restore (parRedo' (p:ps) ts) `onException` stopChild p
        parRedo' ps _ = return $ reverse ps
 
-       spawnChild t = asyncOS (relayRedo t `finally` C.releaseProcessorToken)
+       spawnChild t = asyncOS (relayRedo t `finally` releaseProcessorToken)
        joinChild = waitEither
        stopChild = wait
        checkInterrupted p = do
@@ -190,9 +190,6 @@ redoGeneric sigG fs = do
          Nothing -> return ()
        collectResult targets (Right _:rest) = collectResult targets rest
        collectResult _ (Left (e::SomeException) : _) = throwIO e
-
-redo :: [FilePath] -> IO ()
-redo = redoGeneric fileMD5
 
 redo :: [FilePath] -> IO ()
 redo = redoGeneric fileMD5
