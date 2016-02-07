@@ -9,21 +9,27 @@ module Development.Redo (redo,
                          relayRedo,
                          withRedo,
                          C.callDepth,
-                         C.finalize,
-                         C.initialize,
+                         finalize,
+                         initialize,
                          C.RedoSettings(..),
                          C.printDebug,
                          C.printError,
                          C.printInfo,
-                         C.printSuccess
+                         C.printSuccess,
+                         createProcessorTokens,
+                         destroyProcessorTokens,
+                         acquireProcessorToken,
+                         releaseProcessorToken,
+                         withProcessorToken,
+                         withoutProcessorToken
                         ) where
 
 import qualified Development.Redo.Config as C
 import Development.Redo.Future
 import Development.Redo.Util
 
-import Control.Arrow
 import Control.Applicative
+import Control.Arrow
 import Control.Exception
 import Control.Monad
 import qualified Data.ByteString.Lazy as BL
@@ -93,7 +99,7 @@ withTargetLock target io = do
          sem <- semOpen (C.targetLockPrefix ++ C.sessionID ++ encodePath target)
            (OpenSemFlags True False) (CMode 448) 1
          p <- semTryWait sem
-         unless p . C.withoutProcessorToken $ semWait sem
+         unless p . withoutProcessorToken $ semWait sem
          return sem
 
 -- | This returns a temporary file path for the output target.  This
@@ -133,7 +139,7 @@ redoTargetFromDir baseDir target =
   where target' = normalise' target
 
 withRedo :: C.RedoSettings -> IO () -> IO ()
-withRedo settings = bracket_ (C.initialize settings) C.finalize
+withRedo settings = bracket_ (initialize settings) finalize
 
 -- | This concurrently performs redo for multiple targets.
 -- This may throw:
@@ -153,7 +159,7 @@ redoGeneric sigG fs = do
   -- release a process token for sub-processes
   if C.parallelBuild == 1
     then mapM_ relayRedo targets >> collectResult targets []
-    else C.withoutProcessorToken $
+    else withoutProcessorToken $
     -- make all interruptible except joining spawned sub-processes.
     mask $ \restore -> do
       ps <- restore $ parRedo targets
@@ -164,9 +170,9 @@ redoGeneric sigG fs = do
          -- if redo processes which have started earlier exit with error, stop throwing 'DoExitFailure'.
          mapM_ checkInterrupted ps
          mask $ \restore -> do
-           C.acquireProcessorToken
+           acquireProcessorToken
            -- once a child is normaly spawned, it will release the token eventually, see "RelayRedo.hs".
-           p <- restore (spawnChild t) `onException` C.releaseProcessorToken
+           p <- restore (spawnChild t) `onException` releaseProcessorToken
            restore (parRedo' (p:ps) ts) `onException` stopChild p
        parRedo' ps _ = return $ reverse ps
 

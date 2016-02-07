@@ -4,17 +4,28 @@ module Development.Redo.Util (createFile,
                               createTempFile,
                               decodePath,
                               encodePath,
+                              finalize,
                               forkChild,
                               ignoreIOExceptionM,
                               ignoreIOExceptionM_,
+                              initialize,
                               makeRelative',
                               moveFile,
                               normalise',
                               quote,
                               spanM,
                               splitOn,
-                              waitForChildren
+                              waitForChildren,
+                              createProcessorTokens,
+                              destroyProcessorTokens,
+                              acquireProcessorToken,
+                              releaseProcessorToken,
+                              withProcessorToken,
+                              withoutProcessorToken
                              ) where
+
+import Development.Redo.Config
+import Development.Redo.TokenServer
 
 import Control.Concurrent
 import Control.Exception
@@ -23,6 +34,7 @@ import Data.Char
 import Data.List
 import Numeric
 import System.Directory
+import System.Environment
 import System.FilePath
 import System.IO
 import System.IO.Unsafe
@@ -130,3 +142,17 @@ forkChild io = do
   childs <- takeMVar children
   putMVar children (mvar:childs)
   forkFinally io (\_ -> putMVar mvar ())
+
+initialize :: RedoSettings -> IO ()
+initialize settings = when (callDepth == 0) $ do
+  setEnv envSessionID sessionID
+  setEnv envShellOptions $ shellOpts settings
+  setEnv envDebugMode . show $ debug settings
+  setEnv envParallelBuild . show $ inPar settings
+  createGlobalLock
+  createProcessorTokens (inPar settings - 1)
+
+finalize :: IO ()
+finalize =  when (callDepth == 0) $ do
+  destroyProcessorTokens
+  destroyGlobalLock

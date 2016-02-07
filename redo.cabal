@@ -20,14 +20,18 @@ library
                        Development.Redo
                        Development.Redo.Config
                        Development.Redo.Future
+                       Development.Redo.TokenSem
+                       Development.Redo.TokenServer
                        Development.Redo.Util
   build-depends:       ansi-terminal,
                        base >= 4.7 && < 5,
                        bytestring,
                        directory,
                        filepath,
+                       network,
                        process,
                        pureMD5,
+                       transformers,
                        unix
   default-language:    Haskell2010
   default-extensions:  ScopedTypeVariables,

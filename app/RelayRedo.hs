@@ -1,7 +1,6 @@
 module Main where
 
 import Development.Redo
-import Development.Redo.Config
 
 import Control.Exception
 import System.Environment

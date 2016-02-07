@@ -1,7 +1,6 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
-module Development.Redo.Config (acquireProcessorToken,
-                                callDepth,
+module Development.Redo.Config (callDepth,
                                 callerDepsPath,
                                 debugMode,
                                 depsDirPath,
@@ -12,23 +11,20 @@ module Development.Redo.Config (acquireProcessorToken,
                                 envSessionID,
                                 envShellOptions,
                                 envTargetHistory,
-                                finalize,
-                                initialize,
                                 parallelBuild,
                                 printDebug,
                                 printError,
                                 printInfo,
                                 printSuccess,
                                 RedoSettings(..),
-                                releaseProcessorToken,
                                 sessionID,
                                 shellOptions,
                                 targetHistory,
                                 targetLockPrefix,
                                 tempDirPath,
                                 tempOutDirPath,
-                                withoutProcessorToken,
-                                withProcessorToken,
+                                createGlobalLock,
+                                destroyGlobalLock
                                ) where
 
 import Control.Applicative
@@ -79,9 +75,6 @@ envTargetHistory = "REDO_TARGET_HISTORY"
 
 envParallelBuild :: String
 envParallelBuild = "REDO_PARALLEL_BUILD"
-
-semaphorePrefix :: String
-semaphorePrefix = "/redo_sem_"
 
 globalLockPrefix :: String
 globalLockPrefix = "/redo_global_lock_"
@@ -161,63 +154,3 @@ callDepth = unsafePerformIO $ maybe 0 read <$> lookupEnv envCallDepth
 targetHistory :: [String]
 {-# NOINLINE targetHistory #-}
 targetHistory = unsafePerformIO $ maybe [] read <$> lookupEnv envTargetHistory
-
-createProcessorTokens :: Int -> IO ()
-createProcessorTokens n = when (parallelBuild > 1) $ do
-  _ <- semOpen semaphoreID (OpenSemFlags True True) (CMode 448) n
-  printDebug $ "Semaphore '" ++ semaphoreID ++ "' with " ++ show n ++ " sems created."
-
-destroyProcessorTokens :: IO ()
-destroyProcessorTokens = when (parallelBuild > 1) $ do
-  n <- semGetValue semaphore
-  printDebug $ "Semaphore '" ++ semaphoreID ++ "' with " ++ show n ++ " sems destroyed."
-  semUnlink semaphoreID
-
-semaphoreID :: String
-semaphoreID = semaphorePrefix ++ sessionID
-
-semaphore :: Semaphore
-{-# NOINLINE semaphore #-}
-semaphore = unsafePerformIO $ semOpen semaphoreID (OpenSemFlags False False) (CMode 448) 0
-
-acquireProcessorToken :: IO ()
-acquireProcessorToken = when (parallelBuild > 1) $
-  bracketOnError (semWait semaphore) (const $ semPost semaphore)
-  (const $ printProcessorTokens semaphore)
-
-releaseProcessorToken :: IO ()
-releaseProcessorToken = when (parallelBuild > 1) $
-  bracketOnError (semPost semaphore) (const $ semWait semaphore)
-  (const $ printProcessorTokens semaphore)
-
-withProcessorToken :: IO a -> IO a
-withProcessorToken action = if parallelBuild > 1
-                            then bracket_ (semWait semaphore) (semPost semaphore) action
-                            else action
-
-withoutProcessorToken :: IO a -> IO a
-withoutProcessorToken action = if parallelBuild > 1
-                               then bracket_ (semPost semaphore) (semWait semaphore) action
-                               else action
-
--- exitOnException :: IO a -> IO a
--- exitOnException = handle (\(_ :: SomeException) -> exitFailure)
-
-printProcessorTokens :: Semaphore -> IO ()
-printProcessorTokens sem = do
-  n <- semGetValue sem
-  printDebug $ "Semaphores = " ++ show n
-
-initialize :: RedoSettings -> IO ()
-initialize settings = when (callDepth == 0) $ do
-  setEnv envSessionID sessionID
-  setEnv envShellOptions $ shellOpts settings
-  setEnv envDebugMode . show $ debug settings
-  setEnv envParallelBuild . show $ inPar settings
-  createGlobalLock
-  createProcessorTokens (inPar settings - 1)
-
-finalize :: IO ()
-finalize =  when (callDepth == 0) $ do
-  destroyProcessorTokens
-  destroyGlobalLock
