@@ -106,13 +106,13 @@ tempOutFilePath target = do
 fileMD5 :: FilePath -> IO Signature
 fileMD5 f =
   -- any exception (e.g. file does not exists.) causes NoSignature.
-  ignoreExceptionM NoSignature (MD5Sum . show . MD5.md5 <$> BL.readFile f)
+  ignoreIOExceptionM NoSignature (MD5Sum . show . MD5.md5 <$> BL.readFile f)
 
 -- | Thes returns the signature of a file.
 fileStamp :: FilePath -> IO Signature
 fileStamp f =
   -- any exception (e.g. file does not exists.) causes NoSignature.
-  ignoreExceptionM NoSignature (TimeStamp . show . modificationTimeHiRes <$> getFileStatus f)
+  ignoreIOExceptionM NoSignature (TimeStamp . show . modificationTimeHiRes <$> getFileStatus f)
 
 -- | This records a dependency entry in the file.
 recordDependency :: FilePath   -- ^ the file which a dependency will be appended to
@@ -280,7 +280,7 @@ depFilePath target = C.depsDirPath </> encodePath target
 -- | This returns a list of dependencies.
 getDependencies :: RedoTarget
                 -> IO (Maybe [Dependency])
-getDependencies target = ignoreExceptionM Nothing $
+getDependencies target = ignoreIOExceptionM Nothing $
   do depLines <- lines <$> readFile (depFilePath target)
      return . Just . map read $ depLines
 
@@ -304,10 +304,10 @@ runDo target = do
 
   -- Create a temporary file to store dependencies.
   bracketOnError (createTempFile C.tempDirPath . takeFileName $ target ++ ".deps")
-    (ignoreExceptionM_ . removeFile) $
+    (ignoreIOExceptionM_ . removeFile) $
     \tmpDeps ->
       -- Create a temporary output file.
-      bracketOnError (tempOutFilePath target) (ignoreExceptionM_ . removeFile) $
+      bracketOnError (tempOutFilePath target) (ignoreIOExceptionM_ . removeFile) $
         \tmpOut -> do
           executeDo target tmpDeps tmpOut (head doFiles)
           -- Rename temporary files to actual names.
@@ -353,9 +353,10 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
                                 (C.envTargetHistory, show (target : C.targetHistory))]}
      return h
    getExecutor dofile = do
-     exe <- ignoreExceptionM "sh" $ do
-       ('#':'!':exe) <- withFile dofile ReadMode hGetLine
-       return $ strip exe
+     line <- ignoreIOExceptionM "" $ withFile dofile ReadMode hGetLine
+     let exe = case line of
+           ('#':'!':e) -> strip e
+           _ -> "sh"
      if "sh" `isSuffixOf` exe
         -- if the executable is ends with sh, it will run with shell options.
        then return $ exe ++ C.shellOptions

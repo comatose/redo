@@ -5,8 +5,8 @@ module Development.Redo.Util (createFile,
                               decodePath,
                               encodePath,
                               forkChild,
-                              ignoreExceptionM,
-                              ignoreExceptionM_,
+                              ignoreIOExceptionM,
+                              ignoreIOExceptionM_,
                               makeRelative',
                               moveFile,
                               normalise',
@@ -104,11 +104,11 @@ spanM p xall@(x:xs) = do
       return (x:ys, zs)
     else return ([], xall)
 
-ignoreExceptionM :: a -> IO a -> IO a
-ignoreExceptionM r = handle (\(_ :: SomeException) -> return r)
+ignoreIOExceptionM :: a -> IO a -> IO a
+ignoreIOExceptionM r = handle (\(_ :: IOException) -> return r)
 
-ignoreExceptionM_ :: IO () -> IO ()
-ignoreExceptionM_ = ignoreExceptionM ()
+ignoreIOExceptionM_ :: IO () -> IO ()
+ignoreIOExceptionM_ = ignoreIOExceptionM ()
 
 children :: MVar [MVar ()]
 {-# NOINLINE children #-}
