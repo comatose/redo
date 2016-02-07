@@ -89,7 +89,7 @@ server port value = bracket enter exit $ \s -> do
          v <- countTokens
          if v == 0
            then enqueueRequest client
-           else do _ <- liftIO $ sendTo s "ack" client
+           else do _ <- liftIO $ ack s client
                    decreaseToken
          go s
        "post" -> do
@@ -99,13 +99,12 @@ server port value = bracket enter exit $ \s -> do
            Just addr -> do
              increaseToken
              decreaseToken
-             _ <- liftIO $ sendTo s "ack" addr
+             _ <- liftIO $ ack s addr
              return ()
          go s
-       _ -> do
-         liftIO $ C.printDebug "stop issued"
-         (_, q) <- get
-         mapM_ (liftIO . sendTo s "ack" ) q
+       _ -> get >>= mapM_ (ack s) . snd
+
+   ack s client = liftIO $ sendTo s "ack" client `catch` \(_::IOException) -> return (-1)
 
 countTokens :: StateT (Int, [SockAddr]) IO Int
 countTokens = fst <$> get

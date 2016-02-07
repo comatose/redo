@@ -169,8 +169,8 @@ redoGeneric sigG fs = do
        parRedo' (ps) (t:ts) = do
          -- if redo processes which have started earlier exit with error, stop throwing 'DoExitFailure'.
          mapM_ checkInterrupted ps
+         acquireProcessorToken
          mask $ \restore -> do
-           acquireProcessorToken
            -- once a child is normaly spawned, it will release the token eventually, see "RelayRedo.hs".
            p <- restore (spawnChild t) `onException` releaseProcessorToken
            restore (parRedo' (p:ps) ts) `onException` stopChild p
@@ -178,7 +178,7 @@ redoGeneric sigG fs = do
 
        spawnChild t = asyncOS (relayRedo t `finally` releaseProcessorToken)
        joinChild = waitEither
-       stopChild = wait
+       stopChild = waitEither
        checkInterrupted p = do
          r <- tryWaitEither p
          case r of
@@ -339,7 +339,7 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
   -- Add the do file itself as the 1st dependency.
   doSig <- fileMD5 doFile
   recordDependency tmpDeps $ ExistingDependency doFile doSig
-  ec <- runCmd >>= waitForProcess
+  ec <- mask_ (runCmd >>= waitForProcess)
   case ec of
     ExitFailure e -> throwIO $ DoExitFailure target doFile e
     _ -> do built <- doesFileExist tmpOut
@@ -357,7 +357,8 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
                                 (C.envDebugMode, show C.debugMode),
                                 (C.envParallelBuild, show C.parallelBuild),
                                 (C.envDependencyPath, tmpDeps),
-                                (C.envTargetHistory, show (target : C.targetHistory))]}
+                                (C.envTargetHistory, show (target : C.targetHistory))],
+       delegate_ctlc = False}
      return h
    getExecutor dofile = do
      line <- ignoreIOExceptionM "" $ withFile dofile ReadMode hGetLine
