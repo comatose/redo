@@ -61,6 +61,6 @@ main = do
         "redo-ifchange" -> redoIfChange targets
         "redo-ifcreate" -> redoIfCreate targets
         "redo-iftouch" -> redoIfTouch targets
-        "redo-uptodate" -> unless (null targets) . redoUpToDate $ head targets
+        "redo-status" -> redoStatus targets
         _ -> throwIO $ UnknownRedoCommand cmd
       when (callDepth == 0) $ printSuccess "done"

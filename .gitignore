@@ -24,3 +24,4 @@ test/test0/.redo/
 .cabal-sandbox/
 test/test1/.redo/
 test/test2/.redo/
+.redo

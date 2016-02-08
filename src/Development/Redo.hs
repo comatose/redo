@@ -5,7 +5,7 @@ module Development.Redo (redo,
                          redoIfChange,
                          redoIfCreate,
                          redoIfTouch,
-                         redoUpToDate,
+                         redoStatus,
                          RedoException(..),
                          relayRedo,
                          withRedo,
@@ -44,6 +44,8 @@ import System.Process
 -- | A type for redo targets
 -- This should be constructed from 'redoTarget' or 'redoTargetFromDir'.
 type RedoTarget = FilePath
+
+data RedoTargetStatus = UpToDate Bool | Outdated | Conflicted deriving Show
 
 data Signature =
   NoSignature |        -- ^ for non-existing files
@@ -233,61 +235,59 @@ relayRedo :: RedoTarget
 relayRedo target = withTargetLock target $ do
   let indent = replicate C.callDepth ' '
   C.printDebug $ "visit " ++ indent ++ target
-  up <- upToDate target
-  if up
-    then C.printDebug $ target ++ " is up to date."
-    else runDo target
+  st <- targetStatus target
+  case st of
+    Outdated -> runDo target
+    UpToDate False -> C.printDebug $ target ++ " is up to date."
+    UpToDate True -> C.printDebug $ target ++ " is native."
+    Conflicted -> throwIO $ TargetAlreadyExist target
 
-redoUpToDate :: FilePath -> IO ()
-redoUpToDate f = do
+redoStatus :: [FilePath] -> IO ()
+redoStatus fs = do
   dir <- getCurrentDirectory
-  r <- upToDate $ redoTargetFromDir dir f
-  print r
+  -- Redo targets are created from the arguments.
+  let targets = map (redoTargetFromDir dir) fs
+  mapM_ (targetStatus >=> print) targets
 
 -- | This recursively visits its dependencies to test whether it is up to date.
 --
 -- This may throw:
 -- * 'InvalidDependency' if dependency information is recorded incorrectly.
-upToDate :: RedoTarget
-         -> IO Bool
-upToDate target = do
+targetStatus :: RedoTarget
+             -> IO RedoTargetStatus
+targetStatus target = do
   exist <- doesFileExist target
+  let doFiles = listDoFiles target
   doable <- or <$> mapM (doesFileExist . snd) doFiles
-  managed <- doesFileExist $ depFilePath target
-  case (exist, doable, managed) of
-    (False, _, _) -> return False
-    (True, False, False) -> return True
-    (True, True, False) -> throwIO $ TargetAlreadyExist target
-    (True, _, True) -> do p <- upToDate' target
-                          if p
-                            then return True
-                            else return False
- where doFiles = listDoFiles target
-
-upToDate' :: RedoTarget
-          -> IO Bool
-upToDate' target = do
   maybeDeps <- getDependencies target
-  case maybeDeps of
-    (Just deps@(ExistingDependency aDo _:_)) -> do
+  case (exist, doable, maybeDeps) of
+    (False, _, _) -> return Outdated
+    (True, False, Nothing) -> return $ UpToDate True
+    (True, True, Nothing) -> return Conflicted
+    (True, _, Just deps@(ExistingDependency aDo _:_)) -> do
       -- aDo is the do file used to generate the target
       -- exDos are do files which have a higher priority than aDo.
-      let exDos =  takeWhile (/= aDo) . map snd $ listDoFiles target
-      -- call 'upToDate' for exDos as well as recorded dependencies.
-      utd (map NonExistingDependency exDos ++ deps)
+      let exDos =  takeWhile (/= aDo) $ map snd doFiles
+      -- get status for exDos as well as recorded dependencies.
+      collect (map NonExistingDependency exDos ++ deps)
     _ -> throwIO $ InvalidDependency target
- where utd [] = return True
-       utd (t:ts) = do
-         b <- dependencyUpToDate t
-         if b then utd ts else return False
+ where
+   collect [] = return $ UpToDate False
+   collect (d:ds) = do
+     st <- targetStatusDown d
+     case st of
+       (UpToDate _) -> collect ds
+       _ -> return st
 
-dependencyUpToDate :: Dependency -> IO Bool
-dependencyUpToDate (NonExistingDependency target) = not <$> doesFileExist target
-dependencyUpToDate (ExistingDependency target oldSig) = do
+targetStatusDown :: Dependency -> IO RedoTargetStatus
+targetStatusDown (NonExistingDependency target) = do
+  exist <- doesFileExist target
+  if exist then return Outdated else return (UpToDate False)
+targetStatusDown (ExistingDependency target oldSig) = do
   newSig <- getNewSig
   if oldSig /= newSig
-    then return False
-    else upToDate target
+    then return Outdated
+    else targetStatus target
  where getNewSig = case oldSig of
          MD5Sum _ -> fileMD5 target
          TimeStamp _ -> fileStamp target
