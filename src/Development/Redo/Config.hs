@@ -50,7 +50,7 @@ depsDirPath = configDirPath </> "deps"
 
 -- | This is the directory where temporary files are created.
 tempDirPath :: FilePath
-tempDirPath = configDirPath </> "tmp"
+tempDirPath = configDirPath </> "tmp" </> sessionID
 
 -- | This is the directory where temporary output files are created.
 tempOutDirPath :: FilePath
