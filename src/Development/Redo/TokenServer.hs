@@ -50,7 +50,6 @@ destroyProcessorTokens :: IO ()
 destroyProcessorTokens = when (C.parallelBuild > 1) $ do
   sendToServer "shutdown"
   takeMVar mvar
-  removeDirectoryRecursive socketDirPath `catch` (\(_::IOException) -> return ())
 
 acquireProcessorToken :: IO ()
 acquireProcessorToken = when (C.parallelBuild > 1) $ do
@@ -74,7 +73,7 @@ processID = unsafePerformIO getProcessID
 {-# NOINLINE socketDirPath #-}
 socketDirPath :: FilePath
 socketDirPath = unsafePerformIO $ do
-  let p = C.configDirPath </> "uds"
+  let p = C.tempDirPath </> "uds"
   createDirectoryIfMissing True p
   return p
 
