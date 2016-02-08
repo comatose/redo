@@ -21,9 +21,9 @@ main = defaultMainWithHooks simpleUserHooks {
          let dirs = configInstallDirs $ configFlags buildInfo
              dir = (fromPathTemplate . fromFlag $ prefix dirs) </> (fromPathTemplate . fromFlagOrDefault (toPathTemplate "bin") $ bindir dirs)
 #if defined(mingw32_HOST_OS) || defined(__MINGW32__)
-         mapM_ (copyFile "redo.exe") $ map (dir </>) ["redo-ifchange", "redo-ifcreate", "redo-iftouch"]
+         mapM_ (copyFile "redo.exe") $ map (dir </>) ["redo-ifchange", "redo-ifcreate", "redo-iftouch", "redo-uptodate"]
 #else
-         makeSymlinks "redo" $ map (dir </>) ["redo-ifchange", "redo-ifcreate", "redo-iftouch"]
+         makeSymlinks "redo" $ map (dir </>) ["redo-ifchange", "redo-ifcreate", "redo-iftouch", "redo-uptodate"]
 #endif
 
 makeSymlinks :: FilePath -> [FilePath] -> IO ()
