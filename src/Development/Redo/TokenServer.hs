@@ -16,6 +16,7 @@ import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State.Lazy
+import Data.List
 import Network.Socket
 import System.Directory
 import System.FilePath.Posix
@@ -25,6 +26,7 @@ import System.Posix.Types
 
 createProcessorTokens :: Int -> IO ()
 createProcessorTokens n = when (C.parallelBuild > 1) $ do
+  removeSockets
   _ <- forkOS $ server n
   return ()
 
@@ -50,6 +52,11 @@ destroyProcessorTokens :: IO ()
 destroyProcessorTokens = when (C.parallelBuild > 1) $ do
   sendToServer "shutdown"
   takeMVar mvar
+  removeSockets
+
+removeSockets = do
+  files <- map (socketDirPath </>) <$> listDirectory socketDirPath
+  mapM_ removeFile $ filter (isPrefixOf serverName) files
 
 acquireProcessorToken :: IO ()
 acquireProcessorToken = when (C.parallelBuild > 1) $ do
@@ -78,10 +85,10 @@ socketDirPath = unsafePerformIO $ do
   return p
 
 serverName :: String
-serverName = socketDirPath </> "token_server_" ++ C.sessionID
+serverName = socketDirPath </> "token_" ++ C.sessionID
 
 clientName :: String
-clientName = socketDirPath </> "token_client_" ++ show processID
+clientName = serverName ++ "_" ++ show processID
 
 serverAddr :: SockAddr
 serverAddr = SockAddrUnix serverName

@@ -156,4 +156,3 @@ finalize :: IO ()
 finalize = when (callDepth == 0) $ do
   destroyProcessorTokens
   destroyGlobalLock
-  removeDirectoryRecursive tempDirPath `catch` (\(_::IOException) -> return ())
