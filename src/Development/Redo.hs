@@ -4,7 +4,7 @@
 module Development.Redo (redo,
                          redoIfChange,
                          redoIfCreate,
-                         redoStamp,
+                         redoIfTouch,
                          RedoException(..),
                          relayRedo,
                          withRedo,
@@ -220,8 +220,8 @@ redoIfCreate fs = do
 -- * 'DoExitFailure' if any do-script exited with failure.
 -- * 'InvalidDependency' if dependency information is recorded incorrectly.
 -- * 'UnknownRedoCommand' if redo is invoked by unknown commands.
-redoStamp :: [FilePath] -> IO ()
-redoStamp = redoGeneric fileStamp
+redoIfTouch :: [FilePath] -> IO ()
+redoIfTouch = redoGeneric fileStamp
 
 -- |
 -- This may throw:
