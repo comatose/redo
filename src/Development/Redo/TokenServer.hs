@@ -50,7 +50,7 @@ destroyProcessorTokens :: IO ()
 destroyProcessorTokens = when (C.parallelBuild > 1) $ do
   sendToServer "shutdown"
   takeMVar mvar
-  removeDirectoryRecursive socketDirPath
+  removeDirectoryRecursive socketDirPath `catch` (\(_::IOException) -> return ())
 
 acquireProcessorToken :: IO ()
 acquireProcessorToken = when (C.parallelBuild > 1) $ do
@@ -125,8 +125,9 @@ server value = bracket enter exit $ \s -> do
          case addr' of
            Nothing -> increaseToken
            Just addr -> do
-             increaseToken
-             decreaseToken
+             when C.debugMode $ do
+               increaseToken
+               decreaseToken
              _ <- liftIO $ ack s addr
              return ()
          go s
