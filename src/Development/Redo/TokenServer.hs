@@ -17,25 +17,32 @@ import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State.Lazy
 import Network.Socket
+import System.Directory
+import System.FilePath.Posix
 import System.IO.Unsafe
+import System.Posix.Process
+import System.Posix.Types
 
 createProcessorTokens :: Int -> IO ()
 createProcessorTokens n = when (C.parallelBuild > 1) $ do
-  _ <- forkOS $ server 15907 n
+  _ <- forkOS $ server n
   return ()
 
 {-# NOINLINE clientSocket #-}
 clientSocket :: Socket
-clientSocket = unsafePerformIO $ socket AF_INET Datagram defaultProtocol
+clientSocket = unsafePerformIO $ do
+  s <- socket AF_UNIX Datagram defaultProtocol
+  bind s clientAddr
+  return s
 
 sendToServer :: String -> IO ()
 sendToServer msg = do
-  _ <- sendTo clientSocket msg (SockAddrInet 15907 localHost)
+  _ <- sendTo clientSocket msg serverAddr
   return ()
 
 recvFromServer :: String -> IO String
 recvFromServer msg = do
-  _ <- sendTo clientSocket msg (SockAddrInet 15907 localHost)
+  _ <- sendTo clientSocket msg serverAddr
   (msg', _, _) <- recvFrom clientSocket 10
   return msg'
 
@@ -43,6 +50,7 @@ destroyProcessorTokens :: IO ()
 destroyProcessorTokens = when (C.parallelBuild > 1) $ do
   sendToServer "shutdown"
   takeMVar mvar
+  removeDirectoryRecursive socketDirPath `catch` (\(_::IOException) -> return ())
 
 acquireProcessorToken :: IO ()
 acquireProcessorToken = when (C.parallelBuild > 1) $ do
@@ -58,23 +66,43 @@ withProcessorToken = bracket_ acquireProcessorToken releaseProcessorToken
 withoutProcessorToken :: IO a -> IO a
 withoutProcessorToken = bracket_ releaseProcessorToken acquireProcessorToken
 
-{-# NOINLINE localHost #-}
-localHost :: HostAddress
-localHost = unsafePerformIO $ inet_addr "127.0.0.1"
+{-# NOINLINE processID #-}
+processID :: ProcessID
+processID = unsafePerformIO getProcessID
+
+-- | This is the directory where temporary files are created.
+{-# NOINLINE socketDirPath #-}
+socketDirPath :: FilePath
+socketDirPath = unsafePerformIO $ do
+  let p = C.configDirPath </> "uds"
+  createDirectoryIfMissing True p
+  return p
+
+serverName :: String
+serverName = socketDirPath </> "token_server_" ++ C.sessionID
+
+clientName :: String
+clientName = socketDirPath </> "token_client_" ++ show processID
+
+serverAddr :: SockAddr
+serverAddr = SockAddrUnix serverName
+
+clientAddr :: SockAddr
+clientAddr = SockAddrUnix clientName
 
 {-# NOINLINE mvar #-}
 mvar :: MVar ()
 mvar = unsafePerformIO newEmptyMVar
 
-server :: PortNumber -> Int -> IO ()
-server port value = bracket enter exit $ \s -> do
+server :: Int -> IO ()
+server value = bracket enter exit $ \s -> do
   (_, (v, _)) <- runStateT (go s) (value, [])
   liftIO . C.printDebug $ "final tokens = " ++ show v
   return ()
  where
    enter = do
-     s <- liftIO $ socket AF_INET Datagram defaultProtocol
-     liftIO $ bind s (SockAddrInet port localHost)
+     s <- liftIO $ socket AF_UNIX Datagram defaultProtocol
+     liftIO $ bind s serverAddr
      liftIO $ C.printDebug "token server start"
      return s
    exit s = do

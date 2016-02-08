@@ -2,6 +2,7 @@
 
 module Development.Redo.Config (callDepth,
                                 callerDepsPath,
+                                configDirPath,
                                 debugMode,
                                 depsDirPath,
                                 envCallDepth,
