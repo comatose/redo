@@ -44,21 +44,28 @@ import System.Posix.Process
 import System.Posix.Semaphore
 import System.Posix.Types
 
+{-# NOINLINE setUpDirectory #-}
+-- | This is the directory where all redo configurations are located.
+setUpDirectory :: FilePath -> FilePath
+setUpDirectory dir = unsafePerformIO $ do
+  createDirectoryIfMissing True dir
+  return dir
+
 -- | This is the directory where all redo configurations are located.
 configDirPath :: FilePath
-configDirPath = ".redo"
+configDirPath = setUpDirectory ".redo"
 
 -- | This is the directory where dependency files are located.
 depsDirPath :: FilePath
-depsDirPath = configDirPath </> "deps"
+depsDirPath = setUpDirectory $ configDirPath </> "deps"
 
 -- | This is the directory where temporary files are created.
 tempDirPath :: FilePath
-tempDirPath = configDirPath </> "tmp" </> sessionID
+tempDirPath = setUpDirectory $ configDirPath </> "tmp" </> sessionID
 
 -- | This is the directory where temporary output files are created.
 tempOutDirPath :: FilePath
-tempOutDirPath = tempDirPath </> "out"
+tempOutDirPath = setUpDirectory $ tempDirPath </> "out"
 
 envCallDepth :: String
 envCallDepth = "REDO_CALL_DEPTH"
