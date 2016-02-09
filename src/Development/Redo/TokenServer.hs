@@ -1,12 +1,24 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
+-----------------------------------------------------------------------------
+-- |
+--
+-- This is basically a semaphore. I made this because 'sem_wait(3)'
+-- terminates the application without throwing an exception and there
+-- is no chance to clean up resources. There is a version also
+-- implemented using real semaphores included in
+-- Development.Redo.TokenSem, which works well for redo using delegate
+-- processes not threads.
+--
+-----------------------------------------------------------------------------
+
 module Development.Redo.TokenServer (createProcessorTokens,
                                      destroyProcessorTokens,
                                      acquireProcessorToken,
                                      releaseProcessorToken,
                                      withProcessorToken,
                                      withoutProcessorToken
-                                    )where
+                                    ) where
 
 import qualified Development.Redo.Config as C
 
