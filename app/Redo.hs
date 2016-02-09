@@ -27,7 +27,7 @@ options = OptSpec {
                  Option "x" ["xtrace"] "Run with -x (for shells only)."
                  $ NoArg $ \s -> Right s { shellOpts = shellOpts s ++ " -x" },
 
-                 Option "p" ["par"] "Set the number of threads to use."
+                 Option "j" ["jobs"] "Set the number of threads to use."
                  $ ReqArg "NUM" $ \a s -> case readMaybe a of
                     Just n | n > 0  -> Right s { inPar = n }
                     _               -> Left "Invalid value for `par`",
