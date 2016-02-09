@@ -106,10 +106,8 @@ withTargetLock target io = do
 
 -- | This returns a temporary file path for the output target.  This
 -- does not create the file, but involves creating directories for it.
-tempOutFilePath :: RedoTarget -> IO FilePath
-tempOutFilePath target = do
-  createDirectoryIfMissing True C.tempOutDirPath
-  return $ C.tempOutDirPath </> encodePath target
+tempOutFilePath :: RedoTarget -> FilePath
+tempOutFilePath target = C.tempOutDirPath </> encodePath target
 
 -- | This returns the signature of a file.
 fileMD5 :: FilePath -> IO Signature
@@ -335,14 +333,13 @@ runDo target = do
   -- Create a temporary file to store dependencies.
   bracketOnError (createTempFile C.tempDirPath . takeFileName $ target ++ ".deps")
     (ignoreIOExceptionM_ . removeFile) $
-    \tmpDeps ->
-      -- Create a temporary output file.
-      bracketOnError (tempOutFilePath target) (ignoreIOExceptionM_ . removeFile) $
-        \tmpOut -> do
-          executeDo target tmpDeps tmpOut (head doFiles)
-          -- Rename temporary files to actual names.
-          moveFile tmpOut target
-          moveFile tmpDeps (depFilePath target)
+    \tmpDeps -> do {
+      executeDo target tmpDeps tmpOut (head doFiles);
+      -- Rename temporary files to actual names.
+      moveFile tmpOut target;
+      moveFile tmpDeps (depFilePath target)
+      } `onException` ignoreIOExceptionM_ (removeFile tmpOut)
+ where tmpOut = tempOutFilePath target
 
 -- | This executes the do file.
 --
