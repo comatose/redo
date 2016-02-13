@@ -28,6 +28,7 @@ import Control.Exception
 import Control.Monad
 import Control.Monad.IO.Class
 import Control.Monad.Trans.State.Lazy
+import qualified Data.PQueue.Prio.Max as Q
 import Network.Socket
 import System.Directory
 import System.FilePath.Posix
@@ -66,7 +67,7 @@ destroyProcessorTokens = when (C.parallelBuild > 1) $ do
 
 acquireProcessorToken :: IO ()
 acquireProcessorToken = when (C.parallelBuild > 1) $ do
-  msg <- recvFromServer "wait"
+  msg <- recvFromServer ('w':show C.callDepth)  -- send wait using call depth as a priority.
   assert (msg == "ack") $ return ()
 
 releaseProcessorToken :: IO ()
@@ -108,7 +109,7 @@ mvar = unsafePerformIO newEmptyMVar
 
 server :: Int -> IO ()
 server value = bracket enter exit $ \s -> do
-  (_, (v, _)) <- runStateT (go s) (value, [])
+  (_, (v, _)) <- runStateT (go s) (value, Q.empty)
   liftIO . C.printDebug $ "final tokens = " ++ show v
   return ()
  where
@@ -123,12 +124,12 @@ server value = bracket enter exit $ \s -> do
      putMVar mvar ()
 
    go s = do
-     (msg, _, client) <- liftIO $ recvFrom s 10 `onException` C.printDebug "error on recvFrom"
+     (msg, _, client) <- liftIO $ recvFrom s 128 `onException` C.printDebug "error on recvFrom"
      case msg of
-       "wait" -> do
+       ('w':priority) -> do
          v <- countTokens
          if v == 0
-           then enqueueRequest client
+           then enqueueRequest (read priority, client)
            else do _ <- liftIO $ ack s client
                    decreaseToken
          go s
@@ -143,34 +144,37 @@ server value = bracket enter exit $ \s -> do
              _ <- liftIO $ ack s addr
              return ()
          go s
-       _ -> get >>= mapM_ (ack s) . snd
+       _ -> get >>= mapM_ (ack s) . Q.elems . snd
 
    ack s client = liftIO $ sendTo s "ack" client `catch` \(_::IOException) -> return (-1)
 
-countTokens :: StateT (Int, [SockAddr]) IO Int
+type ClientQueue = Q.MaxPQueue Int SockAddr
+
+countTokens :: StateT (Int, ClientQueue) IO Int
 countTokens = fst <$> get
 
-decreaseToken :: StateT (Int, [SockAddr]) IO ()
+decreaseToken :: StateT (Int, ClientQueue) IO ()
 decreaseToken = do
   (v, q) <- get
   put (v - 1, q)
   liftIO . C.printDebug $ "tokens = " ++ show (v - 1) ++ "(-)"
 
-increaseToken :: StateT (Int, [SockAddr]) IO ()
+increaseToken :: StateT (Int, ClientQueue) IO ()
 increaseToken = do
   (v, q) <- get
   put (v + 1, q)
   liftIO . C.printDebug $ "tokens = " ++ show (v + 1) ++ "(+)"
 
-enqueueRequest :: SockAddr -> StateT (Int, [SockAddr]) IO ()
-enqueueRequest r = do
+enqueueRequest :: (Int, SockAddr) -> StateT (Int, ClientQueue) IO ()
+enqueueRequest (p, r) = do
   (v, q) <- get
-  put (v, q ++ [r])
+  put (v, Q.insert p r q)
 
-dequeueRequest :: StateT (Int, [SockAddr]) IO (Maybe SockAddr)
+dequeueRequest :: StateT (Int, ClientQueue) IO (Maybe SockAddr)
 dequeueRequest = do
   (v, q) <- get
-  if null q
+  if Q.null q
     then return Nothing
-    else do put (v, tail q)
-            return . Just $ head q
+    else do let (_, r) = Q.findMax q
+            put (v, Q.deleteMax q)
+            return $ Just r

@@ -29,6 +29,7 @@ library
                        directory,
                        filepath,
                        network,
+                       pqueue,
                        process,
                        pureMD5,
                        transformers,
