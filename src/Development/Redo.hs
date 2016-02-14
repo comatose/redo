@@ -399,6 +399,6 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
 listDoFiles :: RedoTarget -> [(String, FilePath)]
 listDoFiles target = (target, takeFileName target <.> "do") : defaultDos
   where tokens = splitOn "." (takeFileName target)
-        defaultDos = map ((toBaseName *** toFileName) . (`splitAt` tokens)) [1..max 1 (length tokens - 1)]
+        defaultDos = map ((toBaseName *** toFileName) . (`splitAt` tokens)) [1..length tokens - 1]
         toBaseName xs = normalise' $ takeDirectory target </> intercalate "." xs
         toFileName = intercalate "." . ("default":) . (++["do"])
