@@ -395,7 +395,7 @@ executeDo target tmpDeps tmpOut (baseName, doFile) = do
 -- | This lists all applicable do files and redo's $2 names.
 -- e.g.
 -- > listDoFiles "a.b.c"
--- [("a.b.c","a.b.c.do"),("a","default.b.c.do"),("a.b","default.c.do"),("a.b.c","default.do")]
+-- [("a.b.c","a.b.c.do"),("a","default.b.c.do"),("a.b","default.c.do")]
 listDoFiles :: RedoTarget -> [(String, FilePath)]
 listDoFiles target = (target, takeFileName target <.> "do") : defaultDos
   where tokens = splitOn "." (takeFileName target)
